@@ -1574,3 +1574,88 @@ class TestV185:
                      depends_on=[], acceptance="ok"))
         eng._apply_project_scope("fix the site at projects/my-site/", {}, dag)
         assert eng.ctx.state.get("project_dir") == "projects/my-site"
+
+
+class TestV186Watchdog:
+    """v1.8.6: a hung HTTP request must NOT stall the run (live runs #4/#5 hung
+    12-28 min inside one urlopen while the spinner ticked). Each attempt now
+    runs under a watchdog thread; hung keys are skipped fast and the whole call
+    is capped by a wall-clock budget."""
+
+    def _prov(self, cfg, keys, msgs):
+        import nexus.providers.mistral as mm
+        ring = KeyRing("mistral", keys)
+        prov = mm.MistralProvider(cfg, ring, notifier=lambda *a, **k: None)
+        return mm, prov
+
+    def test_hung_key_skipped_and_call_bounded(self):
+        """1 hung key + tiny budget: raises an honest error in ~1-2s, not 28 min."""
+        import time as _t
+        import urllib.error
+        import nexus.providers.mistral as mm
+        ring = KeyRing("mistral", ["a"])
+        prov = mm.MistralProvider(
+            {"timeout": 1, "watchdog_budget_slack": 0, "watchdog_grace": 0},
+            ring, notifier=lambda *a, **k: None)
+        calls = []
+        orig = mm.urllib.request.urlopen
+
+        def hang(req, timeout=None):
+            calls.append(req.get_header("Authorization"))
+            _t.sleep(30)          # never returns
+        mm.urllib.request.urlopen = hang
+        try:
+            t0 = _t.time()
+            with pytest.raises(Exception) as ei:
+                prov._request("/chat/completions", {})
+            dt = _t.time() - t0
+        finally:
+            mm.urllib.request.urlopen = orig
+        assert "watchdog" in str(ei.value).lower() or "call budget" in str(ei.value).lower()
+        assert dt < 10, f"took {dt:.1f}s — the old code took minutes"
+
+    def test_hung_first_key_fails_over_to_second(self):
+        """key A hangs, key B answers → the call succeeds via B."""
+        import time as _t
+        import nexus.providers.mistral as mm
+        ring = KeyRing("mistral", ["a", "b"])
+        prov = mm.MistralProvider(
+            {"timeout": 1, "watchdog_budget_slack": 12, "watchdog_grace": 1},
+            ring, notifier=lambda *a, **k: None)
+        order = []
+        orig = mm.urllib.request.urlopen
+
+        def fake(req, timeout=None):
+            auth = req.get_header("Authorization").split()[-1]
+            order.append(auth)
+            if auth == "a":
+                _t.sleep(30)
+            return FakeResp(b'{"usage":{"total_tokens":5},"ok":true}')
+        mm.urllib.request.urlopen = fake
+        try:
+            data = prov._request("/chat/completions", {})
+        finally:
+            mm.urllib.request.urlopen = orig
+        assert order == ["a", "b"], order
+        assert data.get("ok") is True
+
+    def test_driver_has_meaningful_progress_abort(self):
+        """the TUI driver must treat spinner-only redraws as NO progress."""
+        src = open("tools/tui_run.py", encoding="utf-8").read() if __import__("os").path.exists("tools/tui_run.py") else open("/home/user/tui_run.py", encoding="utf-8").read()
+        assert "meaningful" in src
+        assert "SPIN =" in src                  # spinner charset is excluded
+        assert "stall > 360" in src and "NO_PROGRESS" in src
+
+
+class FakeResp:
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self):
+        return self._body

@@ -69,7 +69,24 @@ def main():
 
     # wait until prompt returns again (task done) or 1500s
     deadline = time.time() + 1500
-    last_len = -1
+
+    SPIN = ("\u280b", "\u2819", "\u2839", "\u2838", "\u283c", "\u2834",
+            "\u2826", "\u2827", "\u2807", "\u280f")
+
+    def meaningful() -> int:
+        """v1.8.6: the TUI spinner redraws in place even when the agent is
+        dead-stuck (live runs #4/#5: one hung HTTPS call plus a ticking spinner
+        for 12-28 min). Raw byte growth is therefore NOT progress; count only
+        lines with real content."""
+        clean = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", text())
+        n = 0
+        for ln in clean.splitlines():
+            st = ln.strip()
+            if st and not st.startswith(SPIN):
+                n += 1
+        return n
+
+    last_meaningful = meaningful()
     stall = 0
     while time.time() < deadline:
         if proc.poll() is not None:
@@ -82,15 +99,15 @@ def main():
                 print("PROMPT BACK — task finished", flush=True)
                 break
         pump(1.0)
-        n = len(raw)
-        if n == last_len:
+        m = meaningful()
+        if m == last_meaningful:
             stall += 1
-            if stall > 600:            # 10 min true silence (long blocking calls redraw in place)
-                print("STALL — forcing done", flush=True)
+            if stall > 360:            # 10 min true silence (long blocking calls redraw in place)
+                print("NO_PROGRESS 6min — forcing done", flush=True)
                 break
         else:
             stall = 0
-            last_len = n
+            last_meaningful = m
 
     pump(2.0)
     try:

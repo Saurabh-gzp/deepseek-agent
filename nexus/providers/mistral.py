@@ -8,6 +8,7 @@ Har call automatically:
 from __future__ import annotations
 
 import json
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -28,6 +29,9 @@ class MistralProvider(BaseProvider):
         self.base_url = cfg.get("base_url", "https://api.mistral.ai/v1").rstrip("/")
         self.timeout = int(cfg.get("timeout", 180))
         self.max_rotations = int(cfg.get("max_key_rotations_per_call", 6))
+        # v1.8.6 watchdog knobs
+        self.watchdog_budget_slack = int(cfg.get("watchdog_budget_slack", 90))
+        self.watchdog_grace = int(cfg.get("watchdog_grace", 5))
 
     # ------------------------------------------------------------------
     def _request(self, path: str, payload: dict, timeout: Optional[int] = None) -> Dict[str, Any]:
@@ -38,6 +42,11 @@ class MistralProvider(BaseProvider):
         # and if all are cooling the ring waits (≤45s) and retries the soonest.
         # The agent can never hit "no keys left"; it only pauses briefly.
         rotations = max(len(self.keyring) or 1, 1)
+        call_t0 = time.time()
+        # whole-call wall-clock cap: timeout for one good generation +
+        # slack for failing over the remaining keys. Configurable so tests
+        # can shrink it.
+        call_budget = self.timeout + self.watchdog_budget_slack
 
         for attempt in range(rotations):
             # v1.8.4: honest stop — if no key has been healthy for 90s+, the
@@ -76,42 +85,77 @@ class MistralProvider(BaseProvider):
                 method="POST",
             )
             t0 = time.time()
-            try:
-                with urllib.request.urlopen(req, timeout=timeout or self.timeout) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
+            # v1.8.6 WATCHDOG: a single urlopen can hang PAST its socket timeout
+            # (live runs #4/#5: one hung request kept the spinner ticking for
+            # 12-28 min). The request runs in a worker thread; if it does not
+            # finish within the attempt budget we skip that key and move on —
+            # the whole call is capped at timeout+90s wall clock.
+            remaining = call_budget - (time.time() - call_t0)
+            if remaining <= 0:
+                break
+            attempt_timeout = int(min(self.timeout, remaining))
+            box: Dict[str, Any] = {}
+
+            def _do() -> None:
+                try:
+                    with urllib.request.urlopen(req, timeout=attempt_timeout) as resp:
+                        box["data"] = json.loads(resp.read().decode("utf-8"))
+                except BaseException as e:  # noqa: BLE001 — capture, handle below
+                    box["err"] = e
+
+            th = threading.Thread(target=_do, daemon=True)
+            th.start()
+            th.join(attempt_timeout + self.watchdog_grace)
+            if th.is_alive():
+                # hung beyond every budget — watchdog skip, key gets a failure streak
+                self.keyring.report_failure(key, None, f"watchdog: hung >{attempt_timeout}s")
+                last_err = ProviderError(
+                    f"Key {key.label} hung {attempt_timeout}s (watchdog killed it)",
+                    retryable=True)
+                self.notify("warn", f"{key.label} HUNG >{attempt_timeout}s — watchdog skip")
+                time.sleep(0.5)
+                continue
+            err = box.get("err")
+            if err is not None and isinstance(err, urllib.error.HTTPError):
+                try:
+                    detail = err.read().decode("utf-8")[:400]
+                except Exception:
+                    detail = str(err)
+                retry_after = 0.0
+                try:
+                    retry_after = float(err.headers.get("Retry-After") or 0)
+                except (TypeError, ValueError):
+                    retry_after = 0.0
+                self.keyring.report_failure(key, err.code, detail, retry_after)
+                last_err = ProviderError(f"HTTP {err.code}: {detail}", status=err.code,
+                                         retryable=err.code in (408, 409, 429) or err.code >= 500)
+                if err.code in (400, 404, 422):  # payload/model problem -> switching won't help
+                    raise last_err
+                if self.keyring.healthy_count > 0:
+                    self.notify("warn", f"Switching key after HTTP {err.code} ({key.label})")
+                    continue
+                time.sleep(min(8, 1.5 ** attempt))
+            elif err is not None and isinstance(err, (urllib.error.URLError, TimeoutError, OSError)):
+                self.keyring.report_failure(key, None, str(err))
+                last_err = ProviderError(f"Network error: {err}", status=None, retryable=True)
+                self.notify("warn", f"Network issue on {key.label}: {err}")
+                time.sleep(min(4, 1.5 ** attempt))
+            elif err is not None and isinstance(err, json.JSONDecodeError):
+                last_err = ProviderError(f"Bad JSON from API: {err}", retryable=True)
+            else:
+                data = box.get("data")
+                if data is None:
+                    last_err = ProviderError("Empty response from API", retryable=True)
+                    continue
                 usage = data.get("usage") or {}
                 self.keyring.report_success(key, int(usage.get("total_tokens") or 0))
                 data["_key_label"] = key.label
                 data["_latency"] = time.time() - t0
                 return data
-            except urllib.error.HTTPError as e:
-                try:
-                    detail = e.read().decode("utf-8")[:400]
-                except Exception:
-                    detail = str(e)
-                retry_after = 0.0
-                try:
-                    retry_after = float(e.headers.get("Retry-After") or 0)
-                except (TypeError, ValueError):
-                    retry_after = 0.0
-                self.keyring.report_failure(key, e.code, detail, retry_after)
-                last_err = ProviderError(f"HTTP {e.code}: {detail}", status=e.code,
-                                         retryable=e.code in (408, 409, 429) or e.code >= 500)
-                if e.code in (400, 404, 422):        # payload/model problem -> switching keys won't help
-                    raise last_err
-                if self.keyring.healthy_count > 0:
-                    self.notify("warn", f"Switching key after HTTP {e.code} ({key.label})")
-                    continue
-                time.sleep(min(8, 1.5 ** attempt))
-            except (urllib.error.URLError, TimeoutError, OSError) as e:
-                self.keyring.report_failure(key, None, str(e))
-                last_err = ProviderError(f"Network error: {e}", status=None, retryable=True)
-                self.notify("warn", f"Network issue on {key.label}: {e}")
-                time.sleep(min(8, 1.5 ** attempt))
-            except json.JSONDecodeError as e:
-                last_err = ProviderError(f"Bad JSON from API: {e}", retryable=True)
 
-        raise last_err or ProviderError("Request failed after all key rotations")
+        raise last_err or ProviderError(
+            f"Request failed after {rotations} keys within the {call_budget:.0f}s "
+            "call budget \u2014 network trouble or all keys exhausted")
 
     # ------------------------------------------------------------------
     def chat(self, model: str, messages: List[dict], tools: Optional[List[dict]] = None,
