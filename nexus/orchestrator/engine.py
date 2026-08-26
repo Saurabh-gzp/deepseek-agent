@@ -666,7 +666,7 @@ class Orchestrator:
             # v1.8.1: the quick (cheap) coder must never handle hosting/verification
             # — live TUI run: host task (short desc) went to codestral-2508 which
             # returned an EMPTY response (0 tool calls), burning an attempt+critic round.
-            quick = (agent_name == "coder" and attempt == 0)
+            quick = (agent_name == "coder" and attempt == 0
                      and len(task.description) < 400
                      and not _QUICK_BLOCK.search(task.description))
             agent = self.agent_for(agent_name, quick=quick)
