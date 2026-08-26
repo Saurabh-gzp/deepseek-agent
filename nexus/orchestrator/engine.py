@@ -485,6 +485,7 @@ class Orchestrator:
                         t.error = str(e)[:300]
                     t.finished = time.time()
                     self.ui.task_end(t)
+                    self._checkpoint(dag, task_id, "")
                     # v1.8: enforce the overall deadline BETWEEN futures too —
                     # a long task must not let the run sail past the cap
                     if time.time() - t0 > self.overall_timeout:
@@ -943,6 +944,17 @@ class Orchestrator:
         self.ctx.state.pop("last_project", None)
         return (f"Dropped **{pdir}** from this session scope "
                 f"(files on disk were not deleted).")
+
+    def _checkpoint(self, dag: TaskDAG, task_id: str, goal: str = "") -> None:
+        try:
+            import json as _json
+            d = Path(self.config.data_dir) / "checkpoints"
+            d.mkdir(parents=True, exist_ok=True)
+            payload = {"task_id": task_id, "goal": goal, "ts": time.time(),
+                       "tasks": [t.to_dict() for t in dag.order()]}
+            (d / f"{task_id}.json").write_text(_json.dumps(payload)[:200000], encoding="utf-8")
+        except Exception:
+            pass
 
     def cancel(self) -> None:
         self.cancelled = True

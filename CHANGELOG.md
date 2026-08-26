@@ -324,3 +324,7 @@ instructions); `--update` mode keeps keys. Entire codebase now English-only.
 - OpenAI-compatible urlopen watchdog (shared httpwatch)
 - acquire_or_wait never force-healthy before Retry-After
 - Memory/RAG SQLite reads under the same lock
+
+## 1.9.3
+- git_add / git_commit (local only, path-sandboxed)
+- DAG checkpoint JSON after every task

@@ -1870,3 +1870,37 @@ class TestOpenAIWatchdog:
         finally:
             oc.json_watchdog = orig
         assert dt < 8, dt
+
+
+class TestGitMutationsAndCheckpoint:
+    def test_git_add_commit_local(self, tmp_path):
+        import subprocess
+        from nexus.tools.gitops import GitTools
+        subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, capture_output=True)
+        (tmp_path / "a.txt").write_text("hi")
+        g = GitTools(tmp_path)
+        assert g.git_add("a.txt").ok
+        r = g.git_commit("add a")
+        assert r.ok, r.error
+        assert g.git_log(1).ok
+
+    def test_git_add_escape_blocked(self, tmp_path):
+        from nexus.tools.gitops import GitTools
+        g = GitTools(tmp_path)
+        r = g.git_add("/etc/passwd")
+        assert not r.ok and "BLOCKED" in (r.error or "")
+
+    def test_checkpoint_writes_json(self, tmp_path):
+        from nexus.orchestrator.engine import Orchestrator
+        from nexus.orchestrator.dag import Task, TaskDAG
+        import types, json
+        eng = Orchestrator.__new__(Orchestrator)
+        eng.config = types.SimpleNamespace(data_dir=tmp_path)
+        dag = TaskDAG()
+        dag.add(Task(id="t1", title="x", description="y"))
+        eng._checkpoint(dag, "abc123", "goal")
+        p = tmp_path / "checkpoints" / "abc123.json"
+        assert p.exists()
+        assert json.loads(p.read_text())["task_id"] == "abc123"
