@@ -11,6 +11,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from ..agents.base import AgentOutcome
@@ -85,6 +86,11 @@ MATH_HAS_OP = _re.compile(r"[\d)]\s*[+\-*/×÷^]\s*[\d(]")
 _QUICK_BLOCK = _re.compile(
     r"host|server|verify|verification|port\s*\d|http|localhost|deploy|live|curl|serve",
     _re.IGNORECASE)
+# v1.8.3: explicit hosting spec the supervisor writes into host-task descriptions
+_START_SERVER_SPEC = _re.compile(
+    r"start_server\(\s*command\s*=\s*['\"]([^'\"]+)['\"][^)]*?port\s*=\s*(\d+)"
+    r"[^)]*?marker\s*=\s*['\"]([^'\"]+)['\"]", _re.S)
+_HTML_TITLE = _re.compile(r"<title>\s*([^<]{2,80}?)\s*</title>", _re.S | _re.I)
 
 
 def quick_math(goal: str) -> Optional[str]:
@@ -162,6 +168,8 @@ class Orchestrator:
         self.overall_timeout = float(self.config.get("autonomy.overall_timeout_seconds", 900))
         self.max_depth = int(self.config.get("autonomy.max_task_depth", 3))
         self._devstral_slots = int(self.config.get("autonomy.max_devstral_parallel", 2))
+        # v1.8.3: verified start_server outputs across the run (hosting truth)
+        self._server_evidence: List[str] = []
 
     # ------------------------------------------------------------------
     def agent_for(self, name: str, quick: bool = False):
@@ -319,8 +327,23 @@ class Orchestrator:
         self.ui.phase("SYNTHESIZE", "supervisor combining results")
         results = [t.to_dict() for t in dag.order()]
         report.tasks = results
+        # v1.8.3: hosting truth is FACT, not opinion — the synthesizer gets the
+        # verified evidence (or the explicit warning) so it can never fabricate
+        # "HTTP 200 / live at / marker found" (live run did exactly that).
+        facts = ""
+        if any(_QUICK_BLOCK.search(t.description) for t in dag.tasks.values()):
+            if self._server_evidence:
+                facts = ("VERIFIED HOSTING EVIDENCE (real start_server tool output, "
+                         "quote it as proof): " + self._server_evidence[-1])
+            else:
+                facts = ("HOSTING REALITY: NO verified hosting happened in this run — "
+                         "no start_server tool output shows HTTP 200 + marker. Your "
+                         "final answer MUST say hosting was NOT verified and give the "
+                         "exact command to run it. NEVER write 'HTTP 200', 'live at', "
+                         "'marker found' or 'hosted' unless the RESULTS contain that "
+                         "actual evidence.")
         try:
-            final = self.supervisor.synthesize(goal, results, plan)
+            final = self.supervisor.synthesize(goal, results, plan, facts=facts)
         except Exception as e:  # noqa: BLE001
             final = self._manual_summary(dag, str(e))
         report.final = final
@@ -333,6 +356,12 @@ class Orchestrator:
         done_n = len(dag.done())
         report.ok = done_n > 0 and not dag.failed()
         report.verified = all(t.score >= 60 for t in dag.done()) if dag.done() else False
+        # hosting-required run with zero real start_server evidence is never 'verified'
+        if (any(_QUICK_BLOCK.search(t.description) for t in dag.tasks.values())
+                and not self._server_evidence):
+            report.verified = False
+            report.stopped_reason = "; ".join(
+                x for x in [report.stopped_reason or "", "hosting not verified"] if x)
         report.elapsed = time.time() - t0
         report.tokens = sum(t.tokens for t in dag.tasks.values())
 
@@ -390,6 +419,51 @@ class Orchestrator:
 
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------
+    def _host_parachute(self, task: Task) -> bool:
+        """v1.8.3: HARNESS-EXECUTED hosting. If a coder task that must host ends
+        without a verified start_server call, the engine starts the server itself:
+        explicit spec (start_server(command=..., port=..., marker=...)) if the
+        plan wrote one, else the newest projects/*/index.html with its <title> as
+        the marker. The agent can simply never fail to host when files exist."""
+        try:
+            text = f"{task.title}\n{task.description}\n{task.acceptance or ''}"
+            m = _START_SERVER_SPEC.search(text)
+            if m:
+                cmd, port, marker = m.group(1), int(m.group(2)), m.group(3)
+            else:
+                base = Path(self.ctx.config.workspace) / "projects"
+                if not base.exists():
+                    return False
+                cands = sorted(base.rglob("index.html"),
+                               key=lambda p: p.stat().st_mtime, reverse=True)
+                if not cands:
+                    return False
+                idx = cands[0]
+                rel = idx.parent.relative_to(Path(self.ctx.config.workspace))
+                title_m = _HTML_TITLE.search(
+                    idx.read_text(encoding="utf-8", errors="replace"))
+                marker = (title_m.group(1).strip() if title_m else "index")[:80]
+                port = 8000
+                cmd = f"python3 -m http.server {port} --directory {rel}"
+            r = self.ctx.shell.start_server(command=cmd, port=port, marker=marker,
+                                            name="nexus-parachute")
+            if not r.ok and "marker" in (r.error or "") and not m:
+                # title guessed wrong? retry with a marker-free verification
+                r = self.ctx.shell.start_server(command=cmd, port=port, marker="",
+                                                name="nexus-parachute")
+            if not r.ok:
+                self.ui.event("warn", f"{task.id}: harness hosting failed: {(r.error or '')[:120]}")
+                return False
+            out = str(r.output or r.error or "")
+            self._server_evidence.append(out[:400])
+            self.ui.event("ok", f"{task.id}: harness hosted + verified ({port})")
+            task.output = (task.output or "") + "\n\n[HARNESS-EXECUTED HOSTING]\n" + out[:800]
+            return True
+        except Exception as e:  # noqa: BLE001
+            self.ui.event("warn", f"{task.id}: harness hosting error: {e}")
+            return False
+
+    # ------------------------------------------------------------------
     def _deadline_or_cancel(self, t0: float) -> bool:
         """v1.8.1: cancelled once the overall cap is crossed — checked on every
         agent STEP so a single long task can't sail past the deadline."""
@@ -429,11 +503,15 @@ class Orchestrator:
                      and not _QUICK_BLOCK.search(task.description))
             agent = self.agent_for(agent_name, quick=quick)
 
+            # v1.8.3: a planned model that stayed silent gets EXCLUDED on retries —
+            # attempt 0 may use task.model, retries always use the role chain
+            # (live: codestral-2508 returned zero tool calls on 3 attempts; only
+            #  devstral-2512 in the chain actually works on this account)
             outcome: AgentOutcome = agent.run(
                 f"{task.title}\n\n{task.description}", context,
                 on_step=lambda s, tt=task: (self._deadline_or_cancel(t0) or
                                             self.ui.task_step(tt, s)), task_id=task_id,
-                model=task.model or None)
+                model=(task.model if attempt == 0 else None))
 
             # v1.8.1: hard deadline — no critic round after the cap is gone
             # (live: the last task of the last plan ran 325s past the 900s cap
@@ -450,6 +528,14 @@ class Orchestrator:
             # calls (live: host task answered empty / 'I cannot use tools') is failed
             # fast WITHOUT a 30-60s critic round; retry immediately with the fix note.
             if agent_name == "coder" and not any(s.kind == "tool" for s in outcome.steps):
+                # v1.8.3: hosting tasks go to the parachute even when the model
+                # returned nothing at all (live: codestral-2508 answered with zero
+                # tool calls on 3 attempts; the host never happened)
+                if _QUICK_BLOCK.search(task.description) and self._host_parachute(task):
+                    task.status = TaskStatus.DONE
+                    task.verdict = "pass"
+                    task.score = 100.0
+                    return
                 if attempt < self.max_retries:
                     self.ui.event("retry", f"{task.id} made no tool calls — retry {attempt + 2}")
                     context += ("\n\nPREVIOUS ATTEMPT MADE NO TOOL CALLS. You MUST actually call "
@@ -458,6 +544,35 @@ class Orchestrator:
                     continue
                 task.status = TaskStatus.FAILED
                 task.error = "agent produced no tool calls (text-only or empty response)"
+                return
+
+            # record real start_server successes (hosting truth for the final answer)
+            for s in outcome.steps:
+                if s.kind == "tool" and s.tool == "start_server" and s.ok:
+                    self._server_evidence.append(str(s.content)[:400])
+
+            # v1.8.3: HARD HOSTING REQUIREMENT — a coder task that involves hosting
+            # (host/server/verify/http/marker...) must show a VERIFIED start_server
+            # call, else the harness executes the hosting itself (parachute).
+            # (live: t4 took 4 unrelated steps, critic said 'partial 70' and the
+            #  score>=70 shortcut marked it DONE with NO server at all.)
+            if (agent_name == "coder" and _QUICK_BLOCK.search(task.description)
+                    and not any(s.kind == "tool" and s.ok and s.tool == "start_server"
+                                for s in outcome.steps)):
+                self.ui.event("warn", f"{task.id}: hosting not executed — harness takes over")
+                if self._host_parachute(task):
+                    task.status = TaskStatus.DONE
+                    task.verdict = "pass"
+                    task.score = 100.0
+                    return
+                if attempt < self.max_retries:
+                    context += ("\n\nPREVIOUS ATTEMPT DID NOT HOST. Hosting is MANDATORY: call "
+                                "start_server(command='python3 -m http.server <port> --directory "
+                                "projects/<slug>', port=<port>, marker='<exact title text>') and "
+                                "report its verified output — or the task FAILS.")
+                    continue
+                task.status = TaskStatus.FAILED
+                task.error = "hosting not executed — no verified start_server call"
                 return
 
             if not outcome.ok and not outcome.output:
@@ -490,7 +605,11 @@ class Orchestrator:
                 task.verdict = verdict.get("verdict", "")
                 self.ui.verdict(task, verdict)
 
-                if verdict.get("verdict") == "pass" or task.score >= 70:
+                # v1.8.3: ONLY a real "pass" verdict completes immediately. A
+                # "partial" (even score>=70) retries with the critic's fix note —
+                # live run: 'partial 70' on a hosting task that never hosted became
+                # DONE through the old score>=70 shortcut.
+                if verdict.get("verdict") == "pass":
                     task.status = TaskStatus.DONE
                     return
                 if verdict.get("verdict") == "partial" and task.score >= 60 and attempt >= self.max_retries:

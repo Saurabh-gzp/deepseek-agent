@@ -1412,3 +1412,33 @@ class TestV181Rules:
         assert "HOSTING MARKER DISCIPLINE" in sup_src
         assert "REPLAN REUSE" in sup_src
         assert "HOSTING ESCALATION" in sup_src
+
+
+class TestV183:
+    """v1.8.3: hosting truth — partial verdicts never auto-DONE, harness parachute,
+    synthesizer can't fabricate hosting claims."""
+
+    def test_start_server_spec_regex(self):
+        from nexus.orchestrator.engine import _START_SERVER_SPEC, _HTML_TITLE
+        desc = ("Host it: call start_server(command='python3 -m http.server 8000 "
+                "--directory projects/varanasi-hub', port=8000, marker='Varanasi Digital Hub', name='hub')")
+        m = _START_SERVER_SPEC.search(desc)
+        assert m, "spec must parse"
+        assert m.group(1).startswith("python3 -m http.server")
+        assert m.group(2) == "8000"
+        assert m.group(3) == "Varanasi Digital Hub"
+        t = _HTML_TITLE.search("<html><head><title> Varanasi Digital Hub </title></head></html>")
+        assert t and t.group(1).strip() == "Varanasi Digital Hub"
+
+    def test_partial_no_autodone_shortcut(self):
+        """the old `score >= 70 -> DONE` shortcut is gone; only 'pass' completes."""
+        src = open("nexus/orchestrator/engine.py", encoding="utf-8").read()
+        assert 'verdict.get("verdict") == "pass":' in src
+        assert "or task.score >= 70" not in src
+
+    def test_synthesize_has_honesty_rule_and_facts(self):
+        src = open("nexus/agents/specialists.py", encoding="utf-8").read()
+        assert "facts: str = \"\"" in src
+        assert "HONESTY RULE" in src
+        assert "HOSTING REALITY" in open("nexus/orchestrator/engine.py", encoding="utf-8").read()
+        assert "_host_parachute" in open("nexus/orchestrator/engine.py", encoding="utf-8").read()

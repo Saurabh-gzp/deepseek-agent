@@ -218,8 +218,10 @@ class SupervisorAgent(BaseAgent):
         "- Do NOT plan a separate 'design doc'/'mockup' task unless the goal explicitly asks for design documents: the coder implements directly from the research task's file, and the research file itself must contain ≥3 concrete recommendations (named in the acceptance) that the code demonstrably applies. Simple site = at most 2 coder tasks (implement → host+verify), never design-doc + implement + host-guide + verify (that is 4 and costs 1000+s).\n"
         "- Plan tasks MUST name the deliverable file paths inside projects/<slug>/ and the exact tool for each step (e.g. 'call start_server(...)' for hosting).\n"
 
-        "- Set \"model\" only when one exact model must run that task (e.g. codestral-2508 for a "
-        "small code task); otherwise leave it empty and the role chain decides.\n"
+        "- Set \"model\" only when one exact model must run that task. IMPORTANT: any task that "
+        "must CALL TOOLS (shell, files, start_server...) gets devstral-2512 — codestral-2508 "
+        "is TEXT-ONLY on some accounts (it answered with zero tool calls in live runs). "
+        "Otherwise leave model empty and the role chain decides.\n"
         "- Every task needs an objective acceptance criterion (file exists, tests pass, etc.).\n"
         "- Reference a skill_id when a matching playbook exists."
     )
@@ -307,8 +309,11 @@ class SupervisorAgent(BaseAgent):
             "_fallback": True,
         }
 
-    def synthesize(self, goal: str, results: List[dict], plan: Dict[str, Any]) -> str:
+    def synthesize(self, goal: str, results: List[dict], plan: Dict[str, Any],
+                   facts: str = "") -> str:
         lines = [f"GOAL: {goal}", f"DELIVERABLE: {plan.get('final_deliverable', '')}", "", "RESULTS:"]
+        if facts:
+            lines.append(f"\nFACTS (authoritative — never contradict them):\n{facts}")
         for r in results:
             lines.append(f"\n### [{r['status'].upper()}] {r['title']} (agent: {r['agent']})\n"
                          f"{str(r.get('output', ''))[:2500]}")
@@ -325,7 +330,11 @@ class SupervisorAgent(BaseAgent):
                     "Structure: 1) what was accomplished 2) key outputs/artifacts (file "
                     "paths) 3) how to use them 4) what is incomplete + next step (if any).\n"
                     "Be concrete and concise. Never invent results that are not in the "
-                    "data. Plain text/markdown only — no JSON dump."))
+                    "data. Plain text/markdown only — no JSON dump.\n"
+                    "HONESTY RULE: if FACTS says hosting was NOT verified, your "
+                    "answer must say so explicitly — never claim HTTP 200, 'live at', "
+                    "'marker found' or 'hosted' as if proven. If FACTS gives verified "
+                    "hosting evidence, quote it as the proof."))
 
 
 # ======================================================================

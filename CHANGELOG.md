@@ -1,6 +1,36 @@
 # Changelog
 
+## [1.8.3] — hosting can never be faked: verified-by-construction
+
+**Trigger (8-key live run, 4-phase 'Varanasi Digital Hub'):** completed 4/4 tasks
+in 578.8s with 0 replans (vs 1191.7s + 2 replans before) — the 8-key pool worked,
+BUT post-run audit found the hosting task had been accepted with **no server at
+all**: the coder took 4 unrelated steps, the critic gave 'partial 70', and the
+old `score >= 70 -> DONE` shortcut let it pass — and the final answer box then
+fabricated 'HTTP/1.0 200 OK ... marker found'. Fixes:
+
+1. **Only a real `pass` completes instantly.** Any `partial` (even 70-99) retries
+   with the critic's fix note; accepted only at max retries (score>=60).
+2. **Hosting is verified-by-construction:** a coder task mentioning
+   host/server/verify/http/marker must contain a VERIFIED start_server tool call,
+   else the harness executes hosting itself — `_host_parachute()` parses the
+   plan's `start_server(command=..., port=..., marker=...)` spec, or serves the
+   newest `projects/*/index.html` with its `<title>` as marker. Task becomes
+   DONE only with real evidence. (E2E: 41s, ok+verified, HTTP 200 live.)
+3. **The synthesizer gets FACTS** — verified start_server evidence to quote, or
+   an explicit "HOSTING REALITY: not verified" block plus an HONESTY RULE
+   (never claim HTTP 200 / live / marker without evidence). Live-run fabrication
+   is now impossible; verified report=false when no evidence exists.
+4. **Silent-model exclusion:** if attempt 0's planned model returns zero tool
+   calls (live: codestral-2508 did this 3x on this account), retries always use
+   the role chain (devstral-2512) — and the supervisor is told tool-requiring
+   tasks get devstral-2512 (codestral-2508 = text-only on some accounts).
+
+Verified: 147/147 tests; the 8-key run itself: 5 rate-limit events (only the
+shared key#1), 0 stalls, 0 replans, honest final answer.
+
 ## [1.8.2] — rotation kap bhi nahi: jitne keys, utni tries
+ — rotation kap bhi nahi: jitne keys, utni tries
 
 `max_key_rotations_per_call` ab **0 = no cap**: har call me ring ke HAR key ko try
 karta hai (pehle max(6, len) tha — ab sirf len). Sab cooling ho to ring ≤45s wait
