@@ -217,6 +217,11 @@ class SupervisorAgent(BaseAgent):
 "\n"
         "- Do NOT plan a separate 'design doc'/'mockup' task unless the goal explicitly asks for design documents: the coder implements directly from the research task's file, and the research file itself must contain ≥3 concrete recommendations (named in the acceptance) that the code demonstrably applies. Simple site = at most 2 coder tasks (implement → host+verify), never design-doc + implement + host-guide + verify (that is 4 and costs 1000+s).\n"
         "- Plan tasks MUST name the deliverable file paths inside projects/<slug>/ and the exact tool for each step (e.g. 'call start_server(...)' for hosting).\n"
+        "- SLUG CONSISTENCY (critical): if the GOAL mentions a project path like "
+        "projects/<slug>/, the plan MUST use that EXACT slug everywhere (files, "
+        "acceptance, hosting command). Never invent a different slug — live run: "
+        "goal said projects/varanasi-hub, plan used complete-varanasi-digital, and the "
+        "acceptance check failed the task forever.\n"
 
         "- Set \"model\" only when one exact model must run that task. IMPORTANT: any task that "
         "must CALL TOOLS (shell, files, start_server...) gets devstral-2512 — codestral-2508 "

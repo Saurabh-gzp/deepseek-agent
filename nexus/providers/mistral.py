@@ -40,6 +40,18 @@ class MistralProvider(BaseProvider):
         rotations = max(len(self.keyring) or 1, 1)
 
         for attempt in range(rotations):
+            # v1.8.4: honest stop — if no key has been healthy for 90s+, the
+            # quota is gone (not a storm). Raise instead of spinning in circles.
+            if self.keyring.healthy_count == 0:
+                self.keyring.mark_all_down()
+                if self.keyring.all_down_for(90):
+                    raise ProviderError(
+                        "ALL API keys have been rate-limited / quota-exhausted for "
+                        "90s+ (nothing is recovering). Pausing honestly instead of "
+                        "retrying in circles — add fresh keys or wait.", status=429,
+                        retryable=False)
+            else:
+                self.keyring.mark_healthy()
             key = self.keyring.acquire(exclude=tried)
             if key is None:
                 # every key tried/cooling — wait for the soonest instead of dying

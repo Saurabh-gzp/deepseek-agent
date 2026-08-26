@@ -1442,3 +1442,54 @@ class TestV183:
         assert "HONESTY RULE" in src
         assert "HOSTING REALITY" in open("nexus/orchestrator/engine.py", encoding="utf-8").read()
         assert "_host_parachute" in open("nexus/orchestrator/engine.py", encoding="utf-8").read()
+
+
+class TestV184:
+    """v1.8.4: an all-keys-down situation becomes an HONEST error, not a silence loop."""
+
+    def test_all_down_hooks(self):
+        ring = KeyRing("t", ["a"])
+        assert ring.all_down_for(90) is False
+        ring.mark_all_down()
+        import time as _t
+        assert ring.all_down_for(0) is True       # marker set -> immediately "down"
+        ring.mark_healthy()
+        assert ring.all_down_for(999999) is False  # reset works
+        ring.mark_all_down()
+        ring.mark_all_down()                        # idempotent
+        assert ring.all_down_for(0) is True
+
+    def test_mistral_raises_honestly_when_all_down(self):
+        import time as _t
+        import nexus.providers.mistral as mm
+        from nexus.providers.keyring import KeyRing, KeyState
+        ring = KeyRing("mistral", ["a"])
+        ring.keys[0].state = KeyState.DEAD                       # no healthy key
+        ring.keys[0].cooldown_until = _t.time() + 9999
+        ring.mark_all_down()
+        ring._no_health_since = _t.time() - 200                  # 200s ago, never recovered
+        prov = mm.MistralProvider({}, ring, notifier=lambda *a, **k: None)
+        err = None
+        try:
+            prov._request("/chat/completions", {})
+        except Exception as e:  # noqa: BLE001
+            err = e
+        assert err is not None and "quota" in str(err).lower(), f"must raise honest quota error, got {err!r}"
+
+    def test_discover_bulk_mistral_apis(self):
+        """v1.8.4: MISTRAL_APIS (documented) AND MISTRAL_API_KEYS both load."""
+        import os
+        saved = {}
+        for n in ("MISTRAL_APIS", "MISTRAL_API_KEYS", "MISTRALS", "MISTRAL_API_KEY", "MISTRAL_API_KEY_1"):
+            saved[n] = os.environ.pop(n, None)
+        try:
+            os.environ["MISTRAL_APIS"] = "k1,k2,k3"
+            assert KeyRing.discover("mistral", ["MISTRAL_API_KEY"], None) == ["k1", "k2", "k3"]
+            os.environ["MISTRAL_APIS"] = ""
+            os.environ["MISTRAL_API_KEYS"] = "x9,x10"
+            keys = KeyRing.discover("mistral", ["MISTRAL_API_KEY"], None)
+            assert keys == ["x9", "x10"], keys
+        finally:
+            for n, v in saved.items():
+                if v is not None:
+                    os.environ[n] = v

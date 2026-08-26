@@ -77,6 +77,7 @@ class KeyRing:
         self.hard_cooldown = hard_cooldown
         self.notify = notifier or (lambda level, msg: None)
         self._lock = threading.RLock()
+        self._no_health_since: float = 0.0
         self._idx = 0
         self.keys: List[ApiKey] = [
             ApiKey(value=k.strip(), label=f"{provider}#{i + 1}", provider=provider)
@@ -91,6 +92,27 @@ class KeyRing:
     def healthy_count(self) -> int:
         now = time.time()
         return sum(1 for k in self.keys if k.available(now))
+
+    # v1.8.4: honest stop instead of a silent sleep-loop. If at some moment
+    # ZERO keys are healthy, the provider marks it; after `seconds` with no key
+    # ever recovering, the provider raises a clear non-retryable error (24/7:
+    # better an honest 'quota exhausted' than an agent that looks alive but
+    # does nothing — live run sat in nanosleep with 0 sockets for 8+ minutes).
+    def mark_all_down(self) -> None:
+        with self._lock:
+            if self._no_health_since <= 0:
+                self._no_health_since = time.time()
+
+    def mark_healthy(self) -> None:
+        with self._lock:
+            self._no_health_since = 0.0
+
+    def all_down_for(self, seconds: float) -> bool:
+        with self._lock:
+            return (self._no_health_since > 0
+                    and time.time() - self._no_health_since >= seconds)
+
+
 
     def acquire(self, exclude: Optional[set] = None) -> Optional[ApiKey]:
         """Round-robin pick of the next available key. None only if the ring is empty."""
@@ -231,11 +253,14 @@ class KeyRing:
         _add(os.getenv(base))
         for i in range(1, 21):
             _add(os.getenv(f"{base}_{i}"))
-        # comma separated bulk
-        bulk = os.getenv(f"{base}S")
-        if bulk:
-            for part in bulk.split(","):
-                _add(part)
+        # comma separated bulk — accept ALL spellings in use (historic bug: docs
+        # said MISTRAL_APIS but the code read MISTRAL_API_KEYS/MISTRALS; a whole
+        # 8-key pool silently reduced to 1 key -> all traffic on key#1, 429s)
+        for bulk_name in ("MISTRAL_APIS", f"{base}S", f"{provider.upper()}S"):
+            bulk = os.getenv(bulk_name)
+            if bulk:
+                for part in bulk.split(","):
+                    _add(part)
 
         if keyfile and keyfile.exists():
             try:
