@@ -94,10 +94,10 @@ class NexusApp:
             pass
 
     def maybe_first_run_setup(self) -> None:
-        """Pehli baar chalaya + koi key nahi → mini setup wizard.
+        """First run with no keys → mini setup wizard.
 
-        User khud provider chunta hai, key paste karta hai, key LIVE verify
-        hoti hai (invalid save nahi hoti). Multiple keys add kar sakta hai.
+        The user picks a provider, pastes a key, and the key is verified LIVE
+        (invalid keys are never saved). Multiple keys can be added.
         """
         import sys as _sys
         from ..core.keymanager import KeyManager
@@ -115,17 +115,17 @@ class NexusApp:
         except Exception:
             return
         self.ui.rule("SETUP — chalo shuru karein 🚀")
-        self.ui.print("  [muted]Koi API key nahi mili. Agent ko kaam karne ke liye kam se kam "
-                      "1 key chahiye.[/]")
+        self.ui.print("  [muted]No API keys found. The agent needs at least "
+                      "1 key to work.[/]")
         km = KeyManager(self.config)
         provs = [p for p, c in (self.config.get("providers", {}) or {}).items()
                  if p != "default" and isinstance(c, dict) and c.get("enabled")]
-        self.ui.print("  Provider select karo:")
+        self.ui.print("  Select a provider:")
         for i, p in enumerate(provs, 1):
             self.ui.print(f"   [accent]{i}[/] {p}"
                           + ("  [muted](recommended — free: console.mistral.ai)[/]"
                              if p == "mistral" else ""))
-        self.ui.print("   [muted]0 skip (baad me /key se add kar sakta hai)[/]")
+        self.ui.print("   [muted]0 skip (you can add one later with /key)[/]")
         try:
             sel = self.ui.ask("provider").strip()
         except (KeyboardInterrupt, EOFError):
@@ -135,17 +135,17 @@ class NexusApp:
         if not sel.isdigit() or not (1 <= int(sel) <= len(provs)):
             marker.parent.mkdir(parents=True, exist_ok=True)
             marker.write_text("skipped")
-            self.ui.print("  [muted]thik hai — jab chaho /key se key add kar lena[/]")
+            self.ui.print("  [muted]alright — add a key anytime with /key[/]")
             return
         prov = provs[int(sel) - 1]
         added = 0
         while True:
             try:
-                newk = self.ui.ask(f"{prov} API key paste karo", secret=True).strip()
+                newk = self.ui.ask(f"Paste your {prov} API key", secret=True).strip()
             except (KeyboardInterrupt, EOFError):
                 break
             if len(newk) < 16:
-                self.ui.event("error", "key chhoti lag rahi hai — dobara try karo")
+                self.ui.event("error", "key looks too short — try again")
             else:
                 dup = set(km.load(prov)) | {k.value for k in
                                             getattr(reg.keyrings.get(prov), "keys", [])}
@@ -160,9 +160,9 @@ class NexusApp:
                         added += 1
                         self.ui.event("ok", f"key VALID ✓ ({msg}) — saved keys/{prov}.json")
                     else:
-                        self.ui.event("error", f"key INVALID ({msg}) — save nahi hui")
+                        self.ui.event("error", f"key INVALID ({msg}) — not saved")
             try:
-                if not self.ui.confirm("aur ek key add karni hai?", added < 1):
+                if not self.ui.confirm("add another key?", added < 1):
                     break
             except (KeyboardInterrupt, EOFError):
                 break
@@ -311,7 +311,7 @@ class NexusApp:
                 ukeys = unified_keys(km.load(prov), ring)
                 self.ui.rule(f"🔑 {prov.upper()} KEYS")
                 if not ukeys:
-                    self.ui.print("  [muted](koi key nahi — 'a' se add karo)[/]")
+                    self.ui.print("  [muted](no keys yet — press 'a' to add one)[/]")
                 stats = {}
                 if prov in self.ctx.llm.key_status():
                     stats = {k["masked"]: k for k in self.ctx.llm.key_status()[prov]}
@@ -343,11 +343,11 @@ class NexusApp:
                     n = int(act[1:].strip())
                     u = next((x for x in ukeys if x["n"] == n), None)
                     if not u:
-                        self.ui.event("warn", "key number galat hai")
+                        self.ui.event("warn", "invalid key number")
                         continue
                     if u["src"] != "keys/":
                         self.ui.event("warn", f"{u['masked']} .env se aayi hai — "
-                                      "use .env file se delete karo")
+                                      "delete it from the .env file")
                         continue
                     if not self.ui.confirm(f"delete key {u['masked']} ?", False):
                         continue
@@ -362,24 +362,24 @@ class NexusApp:
 
     # ------------------------------------------------------------------
     def _key_add(self, km, prov: str, ring) -> None:
-        """Add + DUPLICATE check + LIVE VERIFY — invalid key kabhi save nahi hoti."""
+        """Add + DUPLICATE check + LIVE VERIFY — invalid keys are never saved."""
         try:
             newk = self.ui.ask("paste API key", secret=True).strip()
         except (KeyboardInterrupt, EOFError):
             return
         if len(newk) < 16:
-            self.ui.event("error", "key bahut chhoti lag rahi hai — check karo")
+            self.ui.event("error", "key looks too short — check it")
             return
-        # duplicate: keys/ file + ring (.env wali) dono se
+        # duplicate check: across both the keys/ files and the ring (.env keys)
         existing = set(km.load(prov)) | {k.value for k in getattr(ring, "keys", [])}
         if newk in existing:
-            self.ui.event("warn", "ye key PEHLE SE added hai (keys/ ya .env me) — duplicate nahi")
+            self.ui.event("warn", "this key is ALREADY added (in keys/ or .env) — not a duplicate")
             return
         with self.ui.spinner(f"verifying key against {prov} API…"):
             ok, msg = self._test_key(prov, newk)
         if not ok:
-            self.ui.event("error", f"key INVALID — save NAHI hui · {msg}")
-            retry = self.ui.confirm("phir try karna hai?", True)
+            self.ui.event("error", f"key INVALID — not saved · {msg}")
+            retry = self.ui.confirm("try again?", True)
             if retry:
                 self._key_add(km, prov, ring)
             return
@@ -388,16 +388,16 @@ class NexusApp:
         self.ui.event("ok", f"key VALID ✓ ({msg}) — saved → keys/{prov}.json")
 
     def _key_test_menu(self, prov: str, ukeys: list) -> None:
-        """t — pehle poochho kaunsi key; top pe 'all'."""
+        """t — first ask which key; 'all' at the top."""
         if not ukeys:
-            self.ui.event("warn", "koi key nahi hai test karne ko")
+            self.ui.event("warn", "no keys to test")
             return
-        self.ui.print("\n  [accent]all[/] — sabhi keys test karo")
+        self.ui.print("\n  [accent]all[/] — test every key")
         for u in ukeys:
             self.ui.print(f"  [accent]{u['n']}[/] {u['masked']} [muted]({u['src']})[/]")
         self.ui.print("  [muted]b[/] back")
         try:
-            sel = self.ui.ask("kaunsi key test?").strip().lower()
+            sel = self.ui.ask("which key to test?").strip().lower()
         except (KeyboardInterrupt, EOFError):
             return
         if sel in ("b", "", "0"):
@@ -425,7 +425,7 @@ class NexusApp:
         self.ui.event("warn", "all | number | b — bas yahi options")
 
     def _test_key(self, prov: str, key: str):
-        """Key ko USI provider ke /models endpoint se verify karo. → (ok, msg)"""
+        """Verify a key against that provider's /models endpoint. → (ok, msg)"""
         import json as _json
         import urllib.request
         cfg = self.config.get(f"providers.{prov}", {}) or {}

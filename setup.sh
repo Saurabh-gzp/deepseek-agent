@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════
 #  NEXUS AGENT — one-command setup
-#  Usage:   bash setup.sh
-#  Flow:    deps install → purani keys/config purge → launch help
+#  Usage:   bash setup.sh          (fresh install: deps + key purge)
+#           bash setup.sh --update (update: deps only, KEEP your keys)
 # ═══════════════════════════════════════════════════════════════
 set -u
 cd "$(dirname "$0")"
@@ -13,6 +13,9 @@ ok()   { printf "  ${GREEN}✓${R} %s\n" "$1"; }
 warn() { printf "  ${YELLOW}⚠${R} %s\n" "$1"; }
 die()  { printf "  ${RED}✗ %s${R}\n" "$1"; exit 1; }
 
+UPDATE_MODE=0
+[ "${1:-}" = "--update" ] && UPDATE_MODE=1
+
 printf "\n${BOLD}╔══════════════════════════════════════════╗
 ║   N E X U S   A G E N T   —   s e t u p   ║
 ╚══════════════════════════════════════════╝${R}\n"
@@ -20,13 +23,13 @@ printf "\n${BOLD}╔════════════════════
 # ── 1. Python check ────────────────────────────────────────────
 step "Python check"
 if ! command -v python3 >/dev/null 2>&1; then
-    warn "python3 nahi mila — installing..."
+    warn "python3 not found — installing..."
     if command -v pkg >/dev/null 2>&1; then      # Termux
         pkg install -y python || die "pkg install python failed"
     elif command -v apt >/dev/null 2>&1; then
         sudo apt update && sudo apt install -y python3 python3-pip || die "apt install failed"
     else
-        die "python3 install karo pehle (https://python.org)"
+        die "please install python3 first (https://python.org)"
     fi
 fi
 PYVER=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
@@ -48,7 +51,7 @@ elif command -v pacman >/dev/null 2>&1; then       # Arch
     sudo pacman -S --noconfirm python-pip python-yaml 2>/dev/null || true
     ok "pacman packages ready"
 else
-    warn "unknown package manager — pip se aage badh rahe hain"
+    warn "unknown package manager — continuing with pip"
 fi
 
 # ── 3. Python dependencies ─────────────────────────────────────
@@ -57,35 +60,40 @@ PIP_FLAGS=""
 python3 -c "import rich, yaml" 2>/dev/null || PIP_FLAGS="--user"
 pip3 install $PIP_FLAGS -r requirements.txt 2>/dev/null \
   || pip3 install $PIP_FLAGS --break-system-packages -r requirements.txt \
-  || die "pip install fail — manually: pip3 install -r requirements.txt"
-python3 -c "import rich"      2>/dev/null && ok "rich"       || warn "rich missing (UI plain dikhega)"
+  || die "pip install failed — try manually: pip3 install -r requirements.txt"
+python3 -c "import rich"      2>/dev/null && ok "rich"       || warn "rich missing (UI will be plain)"
 python3 -c "import yaml"      2>/dev/null && ok "PyYAML"     || warn "PyYAML missing"
-python3 -c "import numpy"     2>/dev/null && ok "numpy (RAG fast-search)" || warn "numpy missing (RAG slow fallback)"
+python3 -c "import numpy"     2>/dev/null && ok "numpy (fast RAG search)" || warn "numpy missing (RAG falls back to slow mode)"
 python3 -c "import prompt_toolkit" 2>/dev/null && ok "prompt_toolkit (nice input)" || warn "prompt_toolkit missing (basic input)"
 
-# ── 4. Purge stale keys/config from an OLDER install ───────────
-step "Purani install ka data check"
-if [ -d .nexus ] || [ -f .env ] || [ -d keys ]; then
-    rm -rf .nexus .env keys
-    ok "Purani keys/config delete ho gayi — fresh wizard chalega"
+# ── 4. Fresh install: purge keys/config from an OLDER install ──
+if [ "$UPDATE_MODE" = "1" ]; then
+    step "Update mode — keeping your keys and config"
+    ok "Keys/config left untouched"
 else
-    ok "Koi purani config nahi — bilkul fresh install"
+    step "Checking for data from an older install"
+    if [ -d .nexus ] || [ -f .env ] || [ -d keys ]; then
+        rm -rf .nexus .env keys
+        ok "Old keys/config removed — a fresh wizard will run"
+    else
+        ok "No previous config — completely fresh install"
+    fi
 fi
 
 # ── 5. Sanity: launcher import test ────────────────────────────
 step "Self-test"
 python3 -c "from nexus.cli.app import main" 2>/dev/null \
-    && ok "Agent core load ho gaya" \
-    || die "core import fail — issue kholo: https://github.com/issues"
+    && ok "Agent core loaded" \
+    || die "core import failed — please open an issue"
 
 # ── 6. Launch instructions ─────────────────────────────────────
 printf "\n${BOLD}${GREEN}══════════════ SETUP COMPLETE ══════════════${R}\n"
 printf """
-${BOLD}Agent launch karne ke liye type karo:${R}
+${BOLD}To launch the agent, type:${R}
 
     ${CYAN}python3 nexus.py${R}
 
-Pehle run pe agent khud API key wizard kholega —
-apni ${BOLD}Mistral AI${R} key maangega (free: console.mistral.ai).
-Key daalte hi agent ready hai. Enjoy! 🚀
+On the first run the agent opens an API-key wizard itself and
+asks for your ${BOLD}Mistral AI${R} key (free: console.mistral.ai).
+Once the key is in, you're ready to go. Enjoy! 🚀
 """

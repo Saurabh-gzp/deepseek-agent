@@ -1,5 +1,5 @@
-"""Slash-command autocomplete — `/` type karo aur saare commands hint ke saath
-dikhne lagte hain (bade agents jaisa). prompt_toolkit optional hai; nahi mile
+"""Slash-command autocomplete — type `/` and all commands show up with hints
+(like the big agents). prompt_toolkit is optional; without it
 to rich fallback chalega.
 
 Features:
@@ -32,22 +32,22 @@ COMMANDS: Dict[str, str] = {
     "/skills": "skills list/search",
     "/skill": "ek skill ka poora playbook dekho",
     "/rag": "knowledge base stats",
-    "/index": "file/folder ko RAG me index karo",
+    "/index": "index a file/folder into RAG",
     "/forget-index": "RAG index clear",
     "/memory": "memory stats + facts",
-    "/remember": "preference save karo (k=v)",
+    "/remember": "save a preference (k=v)",
     "/sessions": "purane sessions list",
-    "/resume": "session resume karo",
-    "/tools": "tools + kaunse agent ko kya mila",
+    "/resume": "resume a session",
+    "/tools": "tools and which agent gets what",
     "/projects": "workspace ke project folders",
-    "/plan": "sirf plan banao, execute nahi",
-    "/auto": "full autonomous orchestration force karo",
+    "/plan": "plan only, no execution",
+    "/auto": "force full autonomous orchestration",
     "/agent": "ek specific agent solo chalao",
-    "/cd": "workspace change karo",
+    "/cd": "change the workspace",
     "/mode": "approval mode (smart/always/never)",
     "/verbose": "step-by-step output toggle",
     "/clear": "screen clear",
-    "/exit": "band karo",
+    "/exit": "shut down",
 }
 
 

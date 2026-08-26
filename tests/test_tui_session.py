@@ -175,7 +175,7 @@ def run(fast=False):
     s.snapshot("tools")
 
     # ---- 7. trivial chat -> router direct (no supervisor)
-    s.send("namaste! tum kaun ho, 2 line me batao")
+    s.send("hello! who are you, tell me in 2 lines")
     ok = s.wait_for(r"ROUTE", 90)
     check("router phase shown", ok)
     ok2 = s.wait_for(r"RESULT|intent=chat", 120)

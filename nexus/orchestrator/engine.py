@@ -3,7 +3,7 @@
     PLAN -> DAG -> ASSIGN -> RUN (parallel, bounded) -> COLLECT
          -> VERIFY (critic) -> FAILED? retry/replan -> SUCCESS? save memory -> FINAL
 
-State-machine/DAG based (free-form agent chatter nahi), budgets ke saath.
+State-machine/DAG based (no free-form agent chatter), with budgets.
 """
 from __future__ import annotations
 
@@ -21,69 +21,69 @@ from .dag import Task, TaskDAG, TaskStatus
 import re as _re
 
 # ---- Router safety net ------------------------------------------------
-# Router ke paas KOI tool nahi hai. Agar request kisi ACTION (file create/
-# delete, code likhna, kuch run karna) ki baat karti hai, to router ka
-# direct_answer kabhi accept nahi hoga — supervisor ko jaana hi padega.
+# The router has NO tools. If the request talks about an ACTION (file
+# create/delete, writing code, running something), its direct_answer is
+# never accepted — it must go through the supervisor.
 ACTION_VERB = _re.compile(
     r"\b(delete|remove|rm|erase|wipe|uninstall|create|write|build|generate|edit|"
     r"modify|update|rename|move|copy|fix|refactor|install|deploy|publish|send|"
     r"email|post|upload|download|scrape|crawl|automate|schedule|convert|"
-    r"compress|migrate|banao|bana|likho|likh|hatao|hata|chalao|chala|save|"
+    r"compress|migrate|save|"
     r"store|record|todo)\b", _re.I)
 DIRECT_SAFE_INTENTS = {"chat", "question"}
 ACTION_CLAIM = _re.compile(
     r"\b(deleted|removed|created|wrote|built|saved|i\s?have|i've|done)\b", _re.I)
-# Device/system ke sawal — router inka "no access" type jawab de deta tha
-# jabki system_info/termux-api se sach me check ho sakta hai.
+# Device/system questions — the router used to answer "no access" even
+# though system_info/termux-api can actually check them.
 DEVICE_Q = _re.compile(
     r"\b(battery|charging|power|storage|disk|space|memory|ram|cpu|temperature|"
     r"overheat|network|wifi|signal|ip\s?address|internet|connect|device|phone|"
     r"screen|brightness|volume|clipboard|location|gps|sensors?|android|termux|"
     r"kernel|uptime|os version)\b", _re.I)
-# LIVE info — model ke paas real-time data nahi hota; web_search karwana padta hai
+# LIVE info — the model has no real-time data; web_search must be used.
 LIVE_Q = _re.compile(
-    r"\b(weather|mausam|temperature|forecast|news|khabar|headlines?|score|match|"
+    r"\b(weather|temperature|forecast|news|headlines?|score|match|"
     r"cricket|ipl|price|rate|stock|share|crypto|bitcoin|currency|dollar|rupee|"
-    r"latest|current|aaj\s?ka|abhi\s?ka|today'?s|right now|who won|kitna hai|"
+    r"latest|current|today'?s|right now|who won|"
     r"release date|schedule|holiday)\b", _re.I)
-# Ek-word greetings — router ko purani memory ka context dena hi mat
-# (live bug: "hy" + purana hosting context => "hosting follow-up" ban gaya,
-#  20s pipeline chali aur goal_statement.md ban gayi. Ab context sirf
-#  tab jab goal me reference ho ya 3+ words hon.)
+# One-word greetings — never feed old memory context to the router
+# (live bug: "hy" + an old hosting memory => "hosting follow-up" plan and
+#  a 20s pipeline that created goal_statement.md. Context is only used
+#  when the goal references it or has 3+ words.)
 GREETING_RE = _re.compile(
-    r"^\s*(h+e+y+|hy+|hi+|hello+|yo+|sup|hola|namaste|namaskar|salaam|"
+    r"^\s*(h+e+y+|hy+|hi+|hello+|yo+|sup|hola|"
     r"hii+|good\s?(morning|afternoon|evening|night|night))\s*[!.,?]*\s*$", _re.I)
 FOLLOWUP_REF = _re.compile(
-    r"\b(it|this|that|yeh|woh|wahi|usko|isko|usse|isse|usk|isk|continue|"
-    r"phir|fir|again|repeat|same|bhi|toh|to|karo|kro)\b", _re.I)
-# Identity sawal — instant deterministic jawab (LLM kabhi ROUTER leak karta tha)
+    r"\b(it|this|that|continue|"
+    r"again|repeat|same|to)\b", _re.I)
+# Identity questions — instant deterministic answer (the LLM sometimes leaked ROUTER)
 IDENTITY_Q = _re.compile(
-    r"(tumhara naam|tera naam|apna naam|your name|tum kaun|kaun ho tum|"
-    r"who are you|apne baare|about yourself|introduce|tum kya kaam|"
-    r"kya kar sakte|what can you do|tum kya kar)", _re.I)
+    r"(your name|who are you|"
+    r"about yourself|introduce|"
+    r"what can you do)", _re.I)
 NEXUS_INTRO = (
-    "Main **Nexus** hoon — tumhara personal autonomous agent, isi device pe chalta hoon.\n"
-    "- 💻 Code likhna, fix karna, run karke verify karna\n"
-    "- 🔍 Web research + live info (mausam, news, price, kuch bhi)\n"
-    "- 📁 Projects banana aur manage karna\n"
+    "I'm **Nexus** — your personal autonomous agent, running right on this device.\n"
+    "- 💻 Write, fix, run and verify code\n"
+    "- 🔍 Web research + live info (weather, news, prices, anything)\n"
+    "- 📁 Build and manage projects\n"
     "- ⚙️ Automation scripts, data analysis\n"
-    "- 🔋 Device check (battery, storage, network)\n"
-    "- 🧠 Cheezein yaad rakhna (memory)\n\n"
-    "Bas bol do kya karna hai — main plan bana ke khud kar dunga.")
+    "- 🔋 Device checks (battery, storage, network)\n"
+    "- 🧠 Remember things (memory)\n\n"
+    "Just tell me what to do — I'll plan it and get it done.")
 GREETING_REPLIES = [
-    "Namaste! 😄 Main Nexus hoon — batao aaj kya kaam karwana hai?",
-    "Hey! Nexus this side 💪 Code, research, files, automation — kya banana hai?",
-    "Hello ji! Kaise ho? Bolo, kya karna hai aaj?",
-    "Yo! Main ready hoon — task do aur dekho kaam ho jata hai ⚡",
+    "Hey! 😄 I'm Nexus — what are we working on today?",
+    "Hi! Nexus here 💪 Code, research, files, automation — what do you need?",
+    "Hello! How's it going? Give me a task and watch it get done.",
+    "Yo! Ready when you are — drop a task and let's go ⚡",
 ]
 
-# Calculator jaisi cheeze LLM ke WAJUHD se kabhi nahi — deterministic Python.
+# Calculator-style math never goes through the LLM — deterministic Python.
 MATH_EXPR = _re.compile(r"^[\s\d+\-*/×÷%^().,]+$")
 MATH_HAS_OP = _re.compile(r"[\d)]\s*[+\-*/×÷^]\s*[\d(]")
 
 
 def quick_math(goal: str) -> Optional[str]:
-    """'8282+282282' jaise pure-arithmetic goals bina LLM ke, locally solve."""
+    """Solve pure-arithmetic goals like '8282+282282' locally, without the LLM."""
     expr = goal.strip().rstrip("?.!=").strip()
     if not MATH_EXPR.match(expr) or not MATH_HAS_OP.search(expr):
         return None
@@ -111,10 +111,10 @@ def router_guard(goal: str, decision: Dict[str, Any]) -> tuple:
     direct = str(d.get("direct_answer") or "").strip()
     unsafe = (intent not in DIRECT_SAFE_INTENTS
               or bool(ACTION_VERB.search(goal))
-              or bool(DEVICE_Q.search(goal))          # device/system poochha
-              or bool(LIVE_Q.search(goal))            # live info — web chahiye
+              or bool(DEVICE_Q.search(goal))          # device/system question
+              or bool(LIVE_Q.search(goal))            # live info — needs web
               or bool(ACTION_CLAIM.search(direct))
-              or bool(MATH_HAS_OP.search(goal)))      # arithmetic — LLM galat karta hai
+              or bool(MATH_HAS_OP.search(goal)))      # arithmetic — the LLM gets it wrong
     if unsafe and (direct or not d.get("needs_orchestration")):
         d["needs_orchestration"] = True
         d["direct_answer"] = ""
@@ -188,7 +188,7 @@ class Orchestrator:
             return report
 
         # ---- fast path 0: greeting / identity — instant, deterministic,
-        #      hamesha user ki script me (Roman Hinglish), LLM call zero
+        #      always in the user's own script, zero LLM calls
         import random as _rnd
         if not force_orchestration:
             if IDENTITY_Q.search(goal) and len(goal.split()) <= 12:
@@ -209,8 +209,8 @@ class Orchestrator:
                     self.ctx.memory.add_message("assistant", reply, "nexus")
                 return report
 
-        # ---- fast path: pure arithmetic ko LLM ke bina, exactly solve karo
-        # (live test: router ne 8282+282282 = 601144 bola tha — galat. Ab kabhi nahi.)
+        # ---- fast path: pure arithmetic solved exactly, without the LLM
+        # (live test: the router claimed 8282+282282 = 601144. Never again.)
         if not force_orchestration:
             ans = quick_math(goal)
             if ans is not None:
@@ -258,9 +258,9 @@ class Orchestrator:
 
         # ---- PLAN
         self.ui.phase("PLAN", "supervisor building task DAG")
-        # Planning ke liye sirf user preferences — purane task summaries
-        # (semantic memory) supervisor ko galat files plan karne se bachane
-        # ke liye plan context me NAHI jaate (live test me pollution pakdi gayi thi).
+        # Planning uses only user preferences — old task summaries
+        # (semantic memory) are NOT injected into plan context, to keep the
+        # supervisor from planning stale files (pollution caught in live tests).
         plan_ctx = ""
         if self.ctx.memory:
             prefs = self.ctx.memory.recall("preference", 8)
@@ -418,8 +418,8 @@ class Orchestrator:
                     task.status = TaskStatus.DONE
                     return
                 if verdict.get("verdict") == "partial" and task.score >= 60 and attempt >= self.max_retries:
-                    # borderline-accept: kaam zyada-tar sahi hai, par FINAL me
-                    # 'partial' dikhna chahiye — DONE ka dhoka nahi (live bug #5)
+                    # borderline-accept: work is mostly right, but FINAL must
+                    # still show 'partial' — no fake DONE (live bug #5)
                     task.status = TaskStatus.DONE
                     task.verdict = "partial"
                     return
@@ -441,7 +441,7 @@ class Orchestrator:
                 task.score = float(hard.get("score", task.score))
                 task.verdict = hard.get("verdict", task.verdict)
                 # DONE sirf tab jab hard-model bhi pass/partial(≥60) bole.
-                # Live bug #5: 3 critic-fail ke baad bhi t1 "done" ho jata tha.
+                # Live bug #5: t1 was still marked "done" after 3 critic failures.
                 hard_v = hard.get("verdict")
                 if hard_v == "pass" or (hard_v == "partial" and task.score >= 60):
                     task.status = TaskStatus.DONE
@@ -473,18 +473,19 @@ class Orchestrator:
 
     # ------------------------------------------------------------------
     SLUG_OK = _re.compile(r"^[a-z0-9][a-z0-9_-]{0,40}$")
-    DELETE_ONLY = _re.compile(r"\b(delete|remove|clean|clear|hatao|hataa|hata|wipe|purge|"
-                              r"khali|empty)\b", _re.I)
-    CREATE_Y = _re.compile(r"\b(create|build|make|generate|banao|bana|likho|new|add|"
+    DELETE_ONLY = _re.compile(r"\b(delete|remove|clean|clear|wipe|purge|"
+                              r"empty)\b", _re.I)
+    CREATE_Y = _re.compile(r"\b(create|build|make|generate|new|add|"
                            r"write|setup|install)\b", _re.I)
 
     def _apply_project_scope(self, goal: str, plan: Dict[str, Any], dag) -> None:
-        """Har build-goal apna project folder milta hai — workspace kabhi
-        cluttered nahi hota (user feedback: 'naya project dunga to files
-        mix ho jayengi'). Supervisor plan me 'project' slug de sakta hai;
-        warna goal se auto-slug banta hai agar plan files create karta hai."""
-        # Live bug: "workspace clean kr" pe bhi projects/workspace-clean-kr/
-        # ban gaya tha. Delete/clean-only goals me isolation BEKAR hai — skip.
+        """Every build-goal gets its own project folder so the workspace
+        never gets cluttered (user feedback: 'a new project would mix
+        files together'). The supervisor may set a 'project' slug in the
+        plan; otherwise one is auto-derived from the goal if the plan
+        creates files."""
+        # Live bug: "workspace clean" also spawned projects/workspace-clean/.
+        # Isolation is pointless for delete/clean-only goals — skip it.
         if self.DELETE_ONLY.search(goal) and not self.CREATE_Y.search(goal):
             plan.pop("project", None)
             self._clear_project_scope()

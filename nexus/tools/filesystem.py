@@ -26,7 +26,7 @@ class FileSystemTools:
 
     def set_write_scope(self, subdir: Optional[str]) -> None:
         """Engine per build-goal ye set karta hai — naye files sirf is
-        project folder me likhe ja sakte hain (reads kahin bhi allowed)."""
+        must be written inside the project folder (reads allowed anywhere)."""
         if subdir is None:
             self.write_scope = None
         else:

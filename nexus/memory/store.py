@@ -1,6 +1,6 @@
 """Long-term memory: sessions, messages, task summaries, user preferences, facts.
 
-Retrieval = recent-window + semantic search (raw conversation dump nahi).
+Retrieval = recent-window + semantic search (no raw conversation dumps).
 """
 from __future__ import annotations
 

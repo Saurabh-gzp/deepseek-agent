@@ -23,7 +23,7 @@ class OpenAICompatibleProvider(BaseProvider):
         self.name = name or cfg.get("name", "openai_compatible")
         self.base_url = cfg.get("base_url", "https://api.openai.com/v1").rstrip("/")
         self.timeout = int(cfg.get("timeout", 180))
-        self.static_key = cfg.get("api_key")   # local servers (ollama) ke liye
+        self.static_key = cfg.get("api_key")   # for local servers (ollama)
 
     def _request(self, path: str, payload: dict) -> Dict[str, Any]:
         tried: set = set()

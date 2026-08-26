@@ -1,81 +1,57 @@
-# Nexus Agent — Termux pe chalane ka tarika (3 minute)
+# Running Nexus Agent on Termux (3 minutes)
 
-## Step 0 — Zip ko Termux me daalo
+Turn an Android phone into a personal AI-agent workstation.
 
-1. Ye zip apne phone ke `Download` folder me rakho
-2. Termux khologe pehli baar to storage permission do:
-   ```
-   termux-setup-storage
-   ```
-3. Zip ko Termux home me copy karo:
-   ```
-   cp /sdcard/Download/nexus-agent-v1.1.zip ~
-   ```
+## Step 1 — Install Termux
 
-## Step 1 — Unzip
+Get Termux from [F-Droid](https://f-droid.org/en/packages/com.termux/)
+(the Play Store build is outdated). Open it and run:
 
-```
-pkg install unzip -y
-cd ~
-unzip nexus-agent-v1.1.zip
-cd nexus-agent
+```bash
+pkg update && pkg upgrade -y
+pkg install -y python git
 ```
 
-## Step 2 — Install (ek baar karna hai)
+## Step 2 — Get the agent & run setup
 
-```
-bash install.sh
-```
-
-Ye khud karega: python + dependencies install, folders banana, offline tests chalana.
-Agar kuch fail ho to bhi chalega — `python` + `rich` + `PyYAML` ho to kaam chal jata hai.
-
-## Step 3 — API key
-
-Zip me `.env` already hai ( tumhari Mistral keys ke saath — **is zip ko kisi ko share mat karna, warna keys leak ho jayengi**).
-
-Nayi key add karni ho to (best tarika — app ke andar se):
-```
-nexus ❯ /key     # menu khulega → 1. Mistral → a (add) → key paste → t 1 (test)
-```
-Keys `keys/mistral.json` me save hoti hain (delete bhi /key se).
-Ya seedha .env me: `nano .env` (MISTRAL_API_KEY=... likh ke save)
-
-## Step 4 — Chalao!
-
-```
-python nexus.py
+```bash
+git clone https://github.com/Saurabh-gzp/nexus-agent.git && cd nexus-agent
+bash setup.sh
 ```
 
-Bas. Ab seedha baat karo:
+setup.sh installs Python dependencies automatically and prints the launch
+command. If anything fails, a minimal `python` + `rich` + `PyYAML` install
+is still enough to run.
+
+## Step 3 — Add a key
+
+Launch the agent:
+
+```bash
+python3 nexus.py
 ```
-nexus ❯ namaste, tum kaun ho?
-nexus ❯ /help
-nexus ❯ /keys
-nexus ❯ ek python script banao jo 1 se 10 squares print kare, run karke output dikhao
+
+The first run opens the key wizard by itself — paste your **Mistral AI**
+key (free: [console.mistral.ai](https://console.mistral.ai)). Keys are
+stored only on your device (`keys/`, chmod 600, gitignored). Add more
+anytime with `/keys add sk-...`.
+
+That's it. Now just talk to it:
+
+```
+nexus ❯ hello, who are you?
+nexus ❯ make a python script that prints squares from 1 to 10, run it and show me the output
+nexus ❯ clean the workspace, delete everything
 ```
 
-## Roz ka istemal
+## Termux extras
 
+```bash
+pkg install -y termux-api        # then: battery, wifi, sensors via termux-api
+pkg install -y python-numpy      # faster RAG search than pip numpy
 ```
-cd ~/nexus-agent
-python nexus.py
-```
-(install.sh ne `nexus` command bhi banaya ho to kahin se bhi `nexus` likh ke chala sakte ho)
 
-## Phone ke liye zaroori settings
-
-- **Battery optimization hatana**: Android Settings → Apps → Termux → Battery → *Unrestricted*
-  (warna screen off hote hi agent ka kaam ruk jayega)
-- Lambe tasks ke liye: `termux-wake-lock` chala do pehle
-- Har chalane par data `~/nexus-agent/.nexus/` me save hota hai (memory, RAG, sessions)
-
-## Common problems
-
-| Problem | Fix |
-|---|---|
-| `python: not found` | `pkg install python` |
-| TUI me color/corrupt dikhe | `pkg install termux-tools` + Termux settings me *Terminal margin* kam karo |
-| 429 / rate-limit messages | Normal hai — 2 keys pe kaam chalta rahega, thoda slow hoga |
-| Storage permission error | `termux-setup-storage` dobara chalao |
-| Kuch aur toot jaye | `python3 -m pytest tests/test_core.py -q` — 101 tests pass hone chahiye |
+- Playwright/Chromium do not run on Termux — the web-automation skill covers
+  the workarounds.
+- `--update` mode: after `git pull`, run `bash setup.sh --update` to refresh
+  dependencies while keeping your keys.

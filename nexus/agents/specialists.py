@@ -59,12 +59,12 @@ class RouterAgent(BaseAgent):
         "needs_orchestration=true. NEVER say you lack access to the user's device/system "
         "(battery, storage, wifi, files) — the system has shell tools; route it with "
         "needs_orchestration=true and suggested_agents=[\"worker\",\"coder\"].\n"
-        "LIVE INFO (weather, news, scores, prices, 'aaj/abhi/current/latest' anything) — "
+        "LIVE INFO (weather, news, scores, prices — anything 'current/latest/today') — "
         "you have NO live data: set needs_orchestration=true with suggested_agents "
         "[\"researcher\"]. NEVER deflect users to other websites/apps.\n\n"
         "WHEN you fill direct_answer, you are speaking AS 'Nexus', the user's personal agent:\n"
         "* Reply in the EXACT SAME language AND script the user used. User writes Roman "
-        "Hinglish ('kaise ho') => reply Roman Hinglish. Devanagari => Devanagari. "
+        "If the user writes in another language, reply in that language "
         "English => English. NEVER switch scripts on the user.\n"
         "* Warm, human, brief (1-3 lines). Like a smart friend, not a support bot.\n"
         "* Your name is 'Nexus'. NEVER mention router/supervisor/sub-agents/pipeline/"
@@ -255,12 +255,12 @@ class SupervisorAgent(BaseAgent):
             system=("You are 'Nexus', the user's personal autonomous agent, writing the "
                     "FINAL answer after your team finished the work.\n"
                     "VOICE: warm, direct, human — like a smart teammate. Reply in the "
-                    "EXACT SAME language and script the user used (Roman Hinglish in => "
-                    "Roman Hinglish out; never switch to Devanagari unless the user did). "
+                    "EXACT SAME language and script the user used (never switch to another "
+                    "script or language unless the user did). "
                     "NEVER mention agents/router/supervisor/critic/tasks/DAG or internal "
-                    "machinery — everything is 'maine kiya' / done by Nexus.\n"
-                    "Structure: 1) kya hua (accomplished) 2) key output/artifacts (file "
-                    "paths) 3) kaise use karein 4) incomplete + next step (agar hai).\n"
+                    "machinery — everything was done by Nexus.\n"
+                    "Structure: 1) what was accomplished 2) key outputs/artifacts (file "
+                    "paths) 3) how to use them 4) what is incomplete + next step (if any).\n"
                     "Be concrete and concise. Never invent results that are not in the "
                     "data. Plain text/markdown only — no JSON dump."))
 
@@ -400,9 +400,9 @@ class CriticAgent(BaseAgent):
             raw = self.llm.ask("hard_fallback", prompt, system=self.system_prompt, task_id=task_id)
             return self._parse(raw, None)
         except Exception as e:  # noqa: BLE001
-            # verify hi nahi ho paya → 'fail'. Kabhi bhi 'partial' mat return karo:
-            # engine partial ko accept kar sakta hai aur unverified kaam 'done'
-            # ban jata tha (live bug #5).
+            # verification itself failed → 'fail'. NEVER return 'partial':
+            # the engine may accept it and mark unverified work 'done'
+            # (live bug #5).
             return {"verdict": "fail", "score": 50,
                     "issues": [f"hard verify unavailable: {e}"],
                     "missing": [], "fix_instructions": ""}

@@ -505,7 +505,7 @@ class TestRateLimiter:
 class TestRouterGuard:
     def test_delete_request_forced_to_orchestration(self):
         from nexus.orchestrator.engine import router_guard
-        # router model ne galat se direct answer diya ("Deleted!") — guard
+        # the router model wrongly answered directly ("Deleted!") — the guard
         # ko ise rokna hai kyunki request ek ACTION hai
         d, overridden = router_guard(
             "delete todo.py from the workspace permanently",
@@ -518,18 +518,18 @@ class TestRouterGuard:
     def test_action_verb_overrides_even_chat_intent(self):
         from nexus.orchestrator.engine import router_guard
         d, overridden = router_guard(
-            "banao ek hello.py file",
+            "make a hello.py file",
             {"intent": "chat", "needs_orchestration": False, "direct_answer": "Done!"})
         assert overridden is True and d["needs_orchestration"] is True
 
     def test_greeting_direct_answer_kept(self):
         from nexus.orchestrator.engine import router_guard
         d, overridden = router_guard(
-            "namaste, tum kaun ho?",
+            "hello, who are you?",
             {"intent": "chat", "needs_orchestration": False,
-             "direct_answer": "Namaste! Main Nexus agent hoon."})
+             "direct_answer": "Hello! I am the Nexus agent."})
         assert overridden is False
-        assert d["direct_answer"].startswith("Namaste")
+        assert d["direct_answer"].startswith("Hello")
 
     def test_simple_question_direct_answer_kept(self):
         from nexus.orchestrator.engine import router_guard
@@ -716,7 +716,7 @@ class TestDeniedPathFreeze:
 
     def test_denied_delete_freezes_path_against_rename(self, tmp_path):
         ctx = self._ctx(tmp_path)
-        answers = {"first": False}          # user ne mana kar diya
+        answers = {"first": False}          # user denied it
         ctx.approval_handler = lambda t, a, ag: False
         # os.remove denied
         assert ctx.approve("run_python", {"code": "import os; os.remove('todo.py')"}, "worker") is False
@@ -724,8 +724,8 @@ class TestDeniedPathFreeze:
         asked = []
         ctx.approval_handler = lambda t, a, ag: asked.append(t) or True
         ok = ctx.approve("move_path", {"src": "todo.py", "dst": ".todo.py.trash"}, "worker")
-        assert ok is False                    # blocked outright, approval pane bhi nahi
-        assert asked == []                    # user ko baar baar mat pareshan karo
+        assert ok is False                    # blocked outright, no approval pane either
+        assert asked == []                    # never nag the user repeatedly
         # shell workaround bhi blocked
         ok = ctx.approve("run_shell", {"command": "mv todo.py .hidden"}, "worker")
         assert ok is False
@@ -760,7 +760,7 @@ class TestDeleteDenyBlocksMove:
         FileSystemTools(tmp_path).register(ctx.tools)
         ctx.guard = SafetyGuard(cfg, llm=None)
         ctx.state = {"approved_always": set(), "denied_paths": set()}
-        # user ne squares.txt ka deletion MANA kiya (absolute path, jaisa live me aata hai)
+        # user denied deletion of squares.txt (absolute path, as it arrives live)
         ctx.approval_handler = lambda *a: False
         denied = ctx.approve("delete_path", {"path": str(tmp_path / "squares.txt")}, "worker")
         assert denied is False
@@ -768,7 +768,7 @@ class TestDeleteDenyBlocksMove:
         ctx.approval_handler = lambda *a: True          # user aage haan bhi bole
         ok = ctx.approve("move_path", {"src": str(tmp_path / "squares.txt"),
                                        "dst": ".deleted"}, "worker")
-        assert ok is False, "move_path se denial circumvent ho gaya!"
+        assert ok is False, "denial was circumvented via move_path!"
         # relative path se bhi try kare to bhi blocked
         ok = ctx.approve("move_path", {"src": "squares.txt", "dst": "x.txt"}, "worker")
         assert ok is False
@@ -798,7 +798,7 @@ class TestPlanPollutionAndEvasions:
         ctx.state = {"approved_always": set(), "denied_paths": set()}
         ctx.approval_handler = lambda *a: False
         ctx.approve("delete_path", {"path": str(tmp_path / "squares.txt")}, "worker")
-        # ab koi bhi rasta — find -delete, python -c os.remove, write — sab block
+        # every route now — find -delete, python -c os.remove, write — all blocked
         for tool, args in [
             ("run_shell", {"command": "find . -name squares.txt -delete"}),
             ("run_shell", {"command": "python -c \"import os; os.remove('squares.txt')\""}),
@@ -810,14 +810,14 @@ class TestPlanPollutionAndEvasions:
             assert ctx.approve(tool, args, "worker") is False, (tool, args)
 
     def test_plan_context_excludes_task_summaries(self):
-        """Engine supervisor ko sirf preferences deta hai, semantic memory nahi."""
+        """Engine gives the supervisor only preferences, not semantic memory."""
         import inspect
         from nexus.orchestrator import engine as eng
         src = inspect.getsource(eng.Orchestrator.handle)
         assert "plan_ctx" in src and "supervisor.plan(goal, plan_ctx)" in src
 
 
-# ============ deletion choke-point: sab raste band, sirf delete_path ========
+# ============ deletion choke-point: every route blocked, only delete_path ========
 class TestDeletionChokePoint:
     def _sh(self, tmp):
         return ShellTools(tmp, 10, [])
@@ -1008,9 +1008,9 @@ class TestUnifiedKeys:
 class TestPersonaAndLiveGuard:
     def test_live_info_forced_to_researcher(self):
         from nexus.orchestrator.engine import router_guard
-        for q in ["aaj mausam kaisa hoga delhi me",
+        for q in ["what's the weather today in delhi",
                   "whats the weather today",
-                  "bitcoin price kitna hai",
+                  "what is the bitcoin price",
                   "who won the match"]:
             d, o = router_guard(q, {"intent": "chat", "needs_orchestration": False,
                                     "direct_answer": "check weather.com"})
@@ -1027,23 +1027,22 @@ class TestPersonaAndLiveGuard:
         import inspect
         from nexus.agents.specialists import SupervisorAgent
         src = inspect.getsource(SupervisorAgent.synthesize)
-        assert "Nexus" in src and "never switch to Devanagari" in src.lower() \
-            or "Roman Hinglish" in src
+        assert "Nexus" in src and "EXACT SAME language" in src
 
 
 # ============ v1.4.1: greeting short-circuit + no clarif-files =========
 class TestGreetingAndClarif:
     def test_greeting_regex(self):
         from nexus.orchestrator.engine import GREETING_RE
-        for g in ["hy", "hyy", "hi", "hiii", "hello", "hello!", "namaste",
+        for g in ["hy", "hyy", "hi", "hiii", "hello", "hello!",
                   "hey", "yo", "good morning", "hy."]:
             assert GREETING_RE.match(g), g
-        for g in ["hy make me an app", "hi whats my battery", "hello banao file",
+        for g in ["hy make me an app", "hi whats my battery", "hello build a file",
                   "history", "thursday"]:
             assert not GREETING_RE.match(g), g
 
     def test_prompt_markup_empty_tag_stripped(self):
-        # live bug: "nexus ❯[/]" dikha tha — empty closing tag strip nahi hota tha
+        # live bug: "nexus ❯[/]" appeared — empty closing tags were not stripped
         import re
         rx = re.compile(r"\[/?[a-z_ #0-9;]*\]")
         assert rx.sub("", "\n[user]nexus ❯[/]").strip() == "nexus ❯"
@@ -1063,11 +1062,11 @@ class TestGreetingAndClarif:
 class TestGreetingIdentityFastPath:
     def test_identity_regex(self):
         from nexus.orchestrator.engine import IDENTITY_Q
-        for q in ["tumhara naam kya hai", "tum kaun ho", "who are you",
-                  "kya kar sakte ho tum", "what can you do"]:
+        for q in ["what is your name", "tell me about yourself", "who are you",
+                  "introduce yourself", "what can you do"]:
             assert IDENTITY_Q.search(q), q
 
-    def test_intro_is_roman_hinglish_no_router(self):
+    def test_intro_is_clean_no_router(self):
         from nexus.orchestrator.engine import NEXUS_INTRO, GREETING_REPLIES
         assert "Nexus" in NEXUS_INTRO and "ROUTER" not in NEXUS_INTRO
         assert all(g.strip() for g in GREETING_REPLIES)
@@ -1098,11 +1097,11 @@ class TestWorkspaceCleanFixes:
         eng.ui = eng.ctx.ui
         dag = TaskDAG()
         dag.add(Task(id="t1", title="Delete all", description="del", agent="worker"))
-        eng._apply_project_scope("workspace clean kr sb kuch delete",
+        eng._apply_project_scope("clean the workspace delete everything",
                                  {"project": "workspace-clean-kr"}, dag)
-        assert "project_dir" not in eng.ctx.state      # scope NAHI lagta
-        assert dag.get("t1").description == "del"          # koi project-note inject NAHI hua
-        # build goal pe scope lagna chahiye
+        assert "project_dir" not in eng.ctx.state      # no scope applied
+        assert dag.get("t1").description == "del"          # no project-note injected
+        # build goals should still get scope
         dag2 = TaskDAG()
         dag2.add(Task(id="t1", title="Build app", description="mk", agent="coder"))
         eng._apply_project_scope("make a calculator app", {"project": "calc"}, dag2)
@@ -1126,7 +1125,7 @@ class TestWorkspaceCleanFixes:
         ctx.approval_handler = handler
         assert ctx.approve("delete_path", {"path": "a"}, "worker") is True
         ctx.approval_handler = lambda *a: (_ for _ in ()).throw(
-            AssertionError("dobara poochha!"))   # aage kabhi nahi poochna
+            AssertionError("asked again!"))      # must never ask again
         for i in range(3):
             assert ctx.approve("delete_path", {"path": f"b{i}"}, "worker") is True
         # run_shell rm bhi action-level always me aata hai
@@ -1145,7 +1144,7 @@ class TestWorkspaceCleanFixes:
         assert 'task.score >= 60 and attempt >= self.max_retries' in esrc
 
     def test_worker_has_delete_path(self):
-        """Bug #6: worker ke allowed_tools me delete_path hona chahiye."""
+        """Bug #6: worker must have delete_path in allowed_tools."""
         from nexus.agents.specialists import WorkerAgent
         assert "delete_path" in WorkerAgent.allowed_tools
         assert "run_shell" in WorkerAgent.allowed_tools

@@ -187,7 +187,7 @@ class AgentContext:
                 if t in ("rm", "rmdir", "unlink", "shred", "mv"):
                     for nxt in toks[i + 1:]:
                         if nxt.startswith("-"):
-                            continue                    # flags skip karo
+                            continue                    # skip flags
                         out.append(nxt)
                         break
         elif tool_name == "run_python":
@@ -205,10 +205,10 @@ class AgentContext:
             for f in frozen:
                 if t == f or t.endswith("/" + f) or f.endswith("/" + t):
                     return True
-        # Hardening: agar user ne kisi file ka tamper mana kiya hai, to us
-        # file ka naam shell command / python code me bhi nahi aa sakta —
-        # warna `find -delete`, `python -c os.remove(...)`, `shred` waghera
-        # se denial circumvent ho jata hai (live test me pakda gaya).
+        # Hardening: if the user denied tampering with a file, that file
+        # name may not appear in shell commands / python code either —
+        # otherwise `find -delete`, `python -c os.remove(...)`, `shred` etc.
+        # would circumvent the denial (caught in a live test).
         if tool_name in ("run_shell", "run_python", "write_file", "edit_file"):
             blob = str(args)
             for f in frozen:
@@ -263,14 +263,14 @@ class AgentContext:
             return False
         allowed = self.approval_handler(tool_name, args, agent)
         if allowed == "always":
-            # user ne 'a' kaha: is tool + isi ACTION (jaise delete_files) ke
-            # saare aane wale calls — dobara mat poochna (batch deletes smooth).
+            # user said 'a' (always): every future call of this tool AND this
+            # ACTION is auto-approved — no re-asking (smooth batch deletes).
             self.state.setdefault("approved_always", set()).add(tool_name)
             if action:
                 self.state["approved_always"].add(f"action:{action}")
             return True
         if not allowed:
-            # Rule: jis action user ne mana kiya, us targets ko freeze karo —
+            # Rule: freeze the targets of any action the user denied —
             # agent unhi paths ko rename/move karke denial circumvent na kar sake.
             for p in self._action_targets(tool_name, args):
                 self.state.setdefault("denied_paths", set()).add(p)

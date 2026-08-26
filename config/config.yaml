@@ -12,7 +12,7 @@ app:
   language: "auto"                  # auto | en | hi  (agent reply language)
 
 # ----------------------------------------------------------
-# PROVIDERS  -> naye provider yahan add karo (openai/groq/etc.)
+# PROVIDERS  -> add new providers here (openai/groq/etc.)
 # ----------------------------------------------------------
 # API keys ka folder — /key menu yahin save karta hai (gitignored, chmod 600)
 keys:

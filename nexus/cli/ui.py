@@ -75,8 +75,8 @@ class Tick:
     """Live processing indicator + elapsed timer.
 
     LLM call ke dauraan screen par '⣾ thinking · worker · 14s' type line
-    chalti rehti hai (background thread se har 0.5s update) — TUI kabhi
-    'ruka hua' nahi lagta (user feedback #3)."""
+    keeps running (background thread updates every 0.5s) — the TUI never
+    looks frozen (user feedback #3)."""
 
     def __init__(self, console: Console, label: str):
         self.console = console

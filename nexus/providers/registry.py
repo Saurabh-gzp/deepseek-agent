@@ -1,8 +1,8 @@
 """Provider registry — plug-and-play provider system.
 
-Naya provider add karne ke liye:
-    1. nexus/providers/myprovider.py me BaseProvider subclass banao
-    2. PROVIDER_TYPES dict me register karo
+To add a new provider:
+    1. create a BaseProvider subclass in nexus/providers/myprovider.py
+    2. register it in the PROVIDER_TYPES dict
     3. config.yaml -> providers.myprovider: {enabled: true, type: myprovider, ...}
 """
 from __future__ import annotations
@@ -51,7 +51,7 @@ class ProviderRegistry:
             if not pcfg.get("enabled"):
                 continue
             keys = KeyRing.discover(pname, pcfg.get("env_keys", []), keyfile)
-            for fk in file_keys.get(pname, []):        # keys/<provider>.json wali keys
+            for fk in file_keys.get(pname, []):        # keys from keys/<provider>.json
                 if fk not in keys:
                     keys.append(fk)
             if not keys and not pcfg.get("api_key"):
@@ -80,9 +80,9 @@ class ProviderRegistry:
 
     # ------------------------------------------------------------------
     def ensure_provider(self, pname: str, keys: Optional[List[str]] = None):
-        """Wizard//key runtime-add: provider live banao (0-keys skip utha lo).
+        """Wizard//key runtime-add: create the provider live (0-keys skip is fine).
 
-        Agar provider pehle se hai → sirf naye keys ring me add hote hain.
+        If the provider already exists → only the new keys are added to its ring.
         Returns keyring ya None.
         """
         from .keyring import KeyRing

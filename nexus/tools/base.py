@@ -3,8 +3,8 @@
 Design principle (harness engineering):
     "Model proposes — harness executes."
 LLM sirf structured tool-call return karta hai; validation, permission check
-aur execution harness karta hai. Isse prompt-injection arbitrary code execution
-tak escalate nahi hota.
+and the execution harness performs it. This stops prompt-injection from
+escalation stops there.
 """
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 
 class Risk(str, Enum):
-    READ_ONLY = "read_only"     # koi side effect nahi
+    READ_ONLY = "read_only"     # no side effects
     WRITE = "write"             # workspace ke andar file write
     NETWORK = "network"         # bahar call
     EXECUTE = "execute"         # shell/python run
@@ -45,8 +45,8 @@ class Tool:
     parameters: Dict[str, Any]
     handler: Callable[..., ToolResult]
     risk: Risk = Risk.READ_ONLY
-    agents: List[str] = field(default_factory=lambda: ["*"])   # kaun use kar sakta hai
-    approval: bool = False                                     # human approval chahiye?
+    agents: List[str] = field(default_factory=lambda: ["*"])   # who may use it
+    approval: bool = False                                     # needs human approval?
 
     def spec(self) -> dict:
         return {

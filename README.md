@@ -45,32 +45,41 @@ Keys that return 401 are quarantined and revived later. Every switch is reported
 
 ## Install
 
-**Ek hi command chahiye — baaki sab setup.sh khud karega:**
+**One command is all you need — setup.sh does the rest:**
 
 ```bash
 git clone https://github.com/Saurabh-gzp/nexus-agent.git && cd nexus-agent
 bash setup.sh
 ```
 
-`setup.sh` kya-kya karta hai:
-1. **System packages** — Termux/Linux/macOS auto-detect karke install
+What `setup.sh` does:
+1. **System packages** — auto-detects Termux/Linux/macOS and installs them
 2. **Python deps** — `rich`, `PyYAML`, `numpy`, `prompt_toolkit`
-3. **Purani install cleanup** — agar pehle se saved keys/config mili to delete
-   (taaki naya clone apni fresh keys khud se is directory me save kare)
-4. **Self-test** — core import verify
-5. **Launch command bata deta hai**
+3. **Old-install cleanup** — removes any previously saved keys/config, so the
+   fresh clone stores its own keys in this directory
+4. **Self-test** — verifies the core imports
+5. **Prints the launch command**
 
-Setup ke baad agent launch karo:
+Then launch the agent:
 
 ```bash
 python3 nexus.py
 ```
 
-Pehle run pe key wizard khud khul jata hai — apni **Mistral AI** key paste karo
-(free: [console.mistral.ai](https://console.mistral.ai)) aur bas. Key `keys/`
-folder me chmod 600 ke saath **sirf tumhare device par** save hoti hai.
+On the first run the key wizard opens by itself — paste your **Mistral AI**
+key (free: [console.mistral.ai](https://console.mistral.ai)) and you're done.
+Keys are saved with chmod 600 **only on your device**, inside `keys/`.
 
-More keys = more uptime — runtime pe `/keys add sk-...` se kabhi bhi jodo.
+More keys = more uptime — add them anytime at runtime with `/keys add sk-...`.
+
+### Update to the latest version
+
+```bash
+git pull && bash setup.sh --update
+```
+
+`--update` re-installs dependencies but **keeps your keys and config** (a plain
+`bash setup.sh` wipes old keys/config for a completely fresh setup).
 
 ---
 
@@ -234,9 +243,9 @@ Context is built from a **recent-message window + semantic search**, never a raw
 | Risk classes | every tool tagged `read_only` / `write` / `network` / `execute` / `destructive` |
 | Least privilege | router has no tools; critic is read-only + execute; researcher cannot delete |
 | Approval gate | delete, deploy, email, publish, payments, account changes ask you first |
-| Deletion choke-point | `run_shell`/`run_python` me file-deletion hard-block — sirf `delete_path` (approval ke saath) se delete ho sakta hai |
-| Denied-path freeze | jis file ka deletion aapne MANA kiya, us path par koi bhi tool (rename/move/write) nahi chalta |
-| Router guard | action requests kabhi router ke direct-answer se nipat nahi hote — supervisor hi jaata hai |
+| Deletion choke-point | file deletion is hard-blocked inside `run_shell`/`run_python` — only `delete_path` (with approval) can delete |
+| Denied-path freeze | deny a file once and no tool (rename/move/write) touches that path again |
+| Router guard | action requests are never answered directly by the router — they always go to the supervisor |
 
 Budgets that stop runaway loops (`config/config.yaml`):
 ```yaml
@@ -251,79 +260,83 @@ large_model_calls_per_task: 1
 
 ## What's new in v1.4.2 — "workspace clean" fix + full tool audit
 
-Live Termux bug-report se 6 root causes mile, sab fix + live-verified:
+Six root causes found from a live Termux bug report — all fixed and
+verified live:
 
-- **Delete ab sach me hota hai** — pehle worker ke paas `delete_path` tha hi
-  nahi, wo text me "user se YES maango" likh baithta tha. Ab ek approval (`a`
-  = always) ka poora delete-batch smoothly chalta hai — live proof: 5 files,
-  1 prompt, critic 100.0 pass, workspace bilkul empty, **no manual `rm -rf`**.
-- **Delete-only goals pe project-folder nahi banta** — `workspace clean kr`
-  ab `projects/<slug>/` pollution nahi karta.
-- **Critic-fail ≠ done** — retries ke baad unverified kaam honestly `FAILED`
-  dikhata hai, `partial`-acceptance sirf score ≥ 60 par.
-- **Tool errors UI me visible** (`✕` ke neeche `↳ reason`) — silent fail nahi.
-- **Critic project-scope aware** — root-location false conflicts khatam,
-  build tasks pehle se ~2.5× fast.
-- **Tool-suite 22/22 direct-run verified** — fs/search/shell/python/web/
-  skills/memory/RAG + rm/python-delete hard-block. Tests: 128 pass.
+- **Deletion actually happens now** — the worker agent previously had no
+  `delete_path` access at all and just asked the user for a "YES" in text.
+  Now one approval (`a` = always) runs the whole delete batch — live proof:
+  5 files, 1 prompt, critic 100.0 pass, workspace completely empty,
+  **no manual `rm -rf`**.
+- **Delete-only goals no longer create a project folder** — `workspace clean`
+  no longer pollutes `projects/<slug>/`.
+- **Critic-fail ≠ done** — after retries, unverified work is honestly marked
+  `FAILED`; `partial` acceptance only at score ≥ 60.
+- **Tool errors are visible in the UI** (`↳ reason` under `✕`) — no silent
+  failures.
+- **Critic is project-scope aware** — root-location false conflicts gone;
+  build tasks are ~2.5× faster than before.
+- **Tool suite verified 22/22 by direct execution** — fs/search/shell/python/
+  web/skills/memory/RAG + hard-blocked rm/python deletes. Tests: 128 pass.
 
 ## What's new in v1.4.1 — chat quality (screenshot feedback)
 
-Live screenshot bug: "hy" likhne par 20s ka pipeline chala aur `goal_statement.md`
-ban gayi (clarification file!). Ab:
+Live screenshot bug: typing "hy" triggered a 20s pipeline that created a
+`goal_statement.md` (a clarification file!). Now:
 
-* **"hy" → 0.4s instant Hinglish reply** — greeting pe LLM call hi zero hai
-  (deterministic warm replies, hamesha user ki script me)
-* **"tumhara naam kya hai" → instant Nexus intro** — capability list ke saath;
-  internal ROUTER/SUPERVISOR ka naam kabhi leak nahi hota
-* **Memory pollution fix** — chhote inputs (greetings) ko router purana context
-  nahi milta ("hy" + purana hosting context = "hosting follow-up" ban jata tha)
-* **Vague goal pe file NAHI banti** — supervisor ab seedha friendly sawaal
-  poochta hai (bade agents jaisa), `goal_statement.md` jaisi absurd files nahi
-* **`nexus ❯[/]` artifact fix** — prompt ab bilkul clean `nexus ❯`
-* Live-info (mausam/news/price) ab researcher ke through web se aata hai —
-  "check weather.com" wala deflection gone
+* **"hy" → 0.4s instant reply** — zero LLM calls for greetings
+  (deterministic warm replies, always in the user's script)
+* **"what's your name" → instant Nexus intro** — with a capability list;
+  internal ROUTER/SUPERVISOR names never leak
+* **Memory pollution fix** — short inputs (greetings) never get stale context
+  ("hy" + an old hosting memory used to become a "hosting follow-up" plan)
+* **Vague goals no longer create files** — the supervisor just asks a friendly
+  question directly (like the big agents); no absurd `goal_statement.md`
+* **`nexus ❯[/]` artifact fixed** — the prompt is now a clean `nexus ❯`
+* Live info (weather/news/prices) now comes from the web via the researcher —
+  the "check weather.com" deflection is gone
 
 ## What's new in v1.4
 
-1. **First-run setup wizard** — pehli baar `nexus` chalao (bina key ke) → khud
-   poochega: provider select karo → key paste karo → **key LIVE verify** hoti hai
-   (invalid save hi nahi hoti) → "aur ek key?" — aur seedha kaam shuru.
-2. **`/key` ab smart:**
-   - `a` add → **duplicate check** (keys/ + .env dono se) + **auto-verify**
-     ushi provider ke API se — invalid key reject
-   - `t` → key-select menu with **`all` on top** — sabhi keys ek saath test
-   - Ek hi table me sab keys with **source** column (keys/ ya .env)
-3. Zip me ab **koi API key nahi** — apni khud add karo (wizard ya /key).
+1. **First-run setup wizard** — run `nexus` once (without a key) → it asks:
+   pick a provider → paste a key → the key is **verified LIVE** (invalid keys
+   are never saved) → "another key?" — then straight to work.
+2. **`/key` is now smart:**
+   - `a` add → **duplicate check** (across both keys/ and .env) + **auto-verify**
+     against that provider's API — invalid keys are rejected
+   - `t` → key-select menu with **`all` on top** — test every key at once
+   - One table for all keys with a **source** column (keys/ or .env)
+3. The zip now contains **no API keys** — add your own (wizard or /key).
 
 ## What's new in v1.3
 
 1. **`/key` — interactive key manager** 🔑 — menu: providers → keys → `a` add /
-   `d N` delete / `t N` **live-test** (API se verify) / `b` back / `0` exit.
-   Keys ab `keys/<provider>.json` me save hoti hain (chmod 600, gitignored).
-   Purana `.nexus/keys.json` auto-migrate. Env keys + file keys dono chalti hain.
-2. **Slash autocomplete** — bas `/` type karo, saare commands hint ke saath
-   dikhte hain; `/skill <tab>` skill ids, `/agent <tab>` names, `/mode <tab>`
-   modes complete hote hain. Arrow-keys se history (persist bhi hoti hai).
-   (`pip install prompt_toolkit` — setup.sh already karta hai; na ho to
-   simple input fallback.)
+   `d N` delete / `t N` **live-test** (verified against the API) / `b` back / `0` exit.
+   Keys are saved in `keys/<provider>.json` (chmod 600, gitignored).
+   The old `.nexus/keys.json` auto-migrates. Env keys and file keys both work.
+2. **Slash autocomplete** — type `/` and every command appears with a hint;
+   `/skill <tab>` completes skill ids, `/agent <tab>` names, `/mode <tab>`
+   modes. Arrow keys browse history (persisted too).
+   (`pip install prompt_toolkit` — setup.sh already installs it; without it
+   a simple input fallback is used.)
 
-## What's new in v1.2 (aapke live Termux feedback se)
+## What's new in v1.2 (from live Termux feedback)
 
-1. **Calculator jhooth band** — `8282+282282` jaise sawal ab LLM ke bina locally
-   solve hote hain (pehle router ne 601144 bola tha — galat). `CALC` phase = exact.
-2. **Device sawal ab sach me check hote hain** — battery/storage/wifi/network poocho
-   to agent `system_info` + shell se probe karta hai (`/sys/class/power_supply`,
-   Termux `termux-battery-status`). "Access nahi hai" wala jhooth gone.
-3. **Project isolation** — har build goal apna folder banata hai
-   (`workspace/projects/<slug>/`). Naye projects kabhi mix nahi honge. `/projects` se list.
-4. **Live processing indicator** — har LLM call pe `thinking · worker · 14s` spinner+timer
-   chalta hai. Screen ab kabhi "ruka hua" nahi lagta.
-5. **Cocoa theme (default)** 🤎 — agent ka kaam dim brown me, user message/RESULT/PLAN
-   apne original colors me. (`-t cyber` se purana mil sakta hai)
-6. **Frontend skill ab enforce hota hai** — 12 quality-gates (`:root` tokens, `@media`,
-   `:focus-visible`, 44px tap targets, 120+ line CSS...) critic grep karke check karta hai;
-   thin/lazy UI fail hoti hai.
+1. **No more calculator lies** — questions like `8282+282282` are now solved
+   locally without the LLM (the router once claimed 601144). `CALC` phase = exact.
+2. **Device questions are now actually checked** — ask about battery/storage/
+   wifi/network and the agent probes with `system_info` + shell
+   (`/sys/class/power_supply`, Termux `termux-battery-status`).
+   The "I don't have access" lie is gone.
+3. **Project isolation** — every build goal gets its own folder
+   (`workspace/projects/<slug>/`). New projects never mix. List them with `/projects`.
+4. **Live processing indicator** — every LLM call shows a `thinking · worker · 14s`
+   spinner+timer. The screen never looks frozen.
+5. **Cocoa theme (default)** 🤎 — agent work in dim brown; user messages/RESULT/PLAN
+   keep their original colors. (`-t cyber` restores the old look)
+6. **Frontend skill is now enforced** — 12 quality gates (`:root` tokens, `@media`,
+   `:focus-visible`, 44px tap targets, 120+ lines of CSS...) which the critic checks
+   via grep; thin/lazy UI fails verification.
 
 ## Testing & real-world audit
 
@@ -332,30 +345,30 @@ ban gayi (clarification file!). Ab:
 python3 -m pytest tests/test_core.py -q
 ```
 
-### Real interactive TUI test (pty session — jaise user terminal me chalaye)
+### Real interactive TUI test (pty session — runs like a user terminal)
 ```bash
 python3 tests/test_tui_session.py          # full: banner, chat, build task, approval y/n + deny
-python3 tests/test_tui_session.py fast     # sirf smoke commands
+python3 tests/test_tui_session.py fast     # smoke commands only
 ```
 
-### Live-audited safety (adversarial pty sessions se proven)
-Real TUI runs me agent ne ye evasions try kiye — sab deterministic harness rules se band hain:
+### Live-audited safety (proven with adversarial pty sessions)
+In real TUI runs the agent attempted these evasions — all blocked by deterministic harness rules:
 
-| Evasion (live me pakda gaya) | Defence (model pe trust nahi) |
+| Evasion (caught live) | Defence (no trust in the model) |
 |---|---|
-| Router ne "Deleted!" jhooth bola (tools hi nahi the) | `router_guard()` — action requests kabhi direct-answer nahi |
-| Files `workspace/workspace/` me gayi (double path) | `_resolve()` dedup — relative + absolute dono |
-| Deny ke baad `move_path` se `.deleted` rename karke circumvent | **denied-path freeze** — denied targets par koi tool nahi chalta |
-| `run_python` me `os.system("rm")`, `shred`, `find -delete`, `.trash` move | **deletion choke-point** — run_shell/run_python me deletion hard-block; sirf `delete_path` (human approval) se delete hota hai |
-| Purane session ki memory se galat file plan (`todos.json`!) | Planning ko sirf preferences milte hain, task summaries nahi |
+| Router claimed "Deleted!" (it had no tools) | `router_guard()` — action requests are never answered directly |
+| Files landed in `workspace/workspace/` (doubled path) | `_resolve()` dedup — relative and absolute |
+| After a deny, renamed to `.deleted` via `move_path` to circumvent | **denied-path freeze** — no tool runs on denied targets |
+| `os.system("rm")`, `shred`, `find -delete`, `.trash` move inside `run_python` | **deletion choke-point** — deletion hard-blocked in run_shell/run_python; only `delete_path` deletes (with human approval) |
+| Stale session memory planned the wrong file (`todos.json`!) | Planning gets preferences only, never task summaries |
 
-### Ek chakkar me sab dekho
+### See it all in one round
 ```bash
 python3 nexus.py
 nexus ❯ /keys
-nexus ❯ namaste, tum kaun ho?                  # router direct — supervisor bypass
+nexus ❯ hello, who are you?                    # router direct — supervisor bypass
 nexus ❯ /auto Create squares.py that prints 1-10 squares, run it, save output to squares.txt
-nexus ❯ delete squares.txt permanently          # approval panel — 'n' dalo, file bachegi
+nexus ❯ delete squares.txt permanently          # approval panel — press 'n' and the file survives
 ```
 
 ## Commands

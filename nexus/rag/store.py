@@ -1,7 +1,7 @@
 """Lightweight vector store — SQLite + numpy (Termux friendly, no pgvector/qdrant needed).
 
 Hybrid retrieval = cosine similarity (dense) + BM25-ish keyword score (sparse).
-Agar aage chalke Qdrant/Chroma chahiye to bas VectorStore interface implement karo.
+If Qdrant/Chroma is ever needed, just implement the VectorStore interface.
 """
 from __future__ import annotations
 

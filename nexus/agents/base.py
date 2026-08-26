@@ -1,9 +1,9 @@
 """BaseAgent — extended ReAct loop (think -> act -> observe -> reflect).
 
 Har agent:
-  * apna role/model chain rakhta hai
-  * sirf apne allowed tools use kar sakta hai (least privilege)
-  * step budget aur timeout ke andar chalta hai
+  * keeps its own role/model chain
+  * may use only its allowed tools (least privilege)
+  * runs within a step budget and timeout
   * skills ko progressive disclosure se load karta hai
 """
 from __future__ import annotations

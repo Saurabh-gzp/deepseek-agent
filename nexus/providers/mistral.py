@@ -1,8 +1,8 @@
-"""Mistral provider — pure-stdlib HTTP (Termux friendly, koi heavy SDK nahi).
+"""Mistral provider — pure-stdlib HTTP (Termux friendly, no heavy SDK).
 
 Har call automatically:
   * KeyRing se healthy key uthata hai
-  * 429/401/5xx par doosri key par switch karta hai (user notify)
+  * on 429/401/5xx it switches to another key (user is notified)
   * model fallback chain caller (LLMClient) handle karta hai
 """
 from __future__ import annotations
@@ -82,7 +82,7 @@ class MistralProvider(BaseProvider):
                 self.keyring.report_failure(key, e.code, detail, retry_after)
                 last_err = ProviderError(f"HTTP {e.code}: {detail}", status=e.code,
                                          retryable=e.code in (408, 409, 429) or e.code >= 500)
-                if e.code in (400, 404, 422):        # payload/model problem -> key badalne se fayda nahi
+                if e.code in (400, 404, 422):        # payload/model problem -> switching keys won't help
                     raise last_err
                 if self.keyring.healthy_count > 0:
                     self.notify("warn", f"Switching key after HTTP {e.code} ({key.label})")

@@ -123,25 +123,25 @@ Only animate `transform` and `opacity`. Durations: 150ms (micro) / 250ms (panel)
 ❌ Auto-playing audio/video · ❌ Custom scrollbars that hide affordance ·
 ❌ Blocking the render on webfonts
 
-## ⛔ QUALITY GATES (critic inhe grep karke check karega — koi bhi fail = task fail)
+## ⛔ QUALITY GATES (the critic greps for these — any one failing = task failed)
 
-Deliverable me ye sab HONI chahiye — "minimal" version pass nahi hoga:
+The deliverable MUST include all of this — a "minimal" version will not pass:
 
 1. `:root{...}` design tokens block — colors + type scale + spacing + radius (min 12 variables)
-2. `@media` breakpoint — kam se kam 1 (mobile-first enhancement)
-3. `:hover` AND `:focus-visible` states — buttons/inputs/links dono par
-4. `transition` — kam se kam 2 jagah (micro-interaction)
-5. `min-height:44px` (ya usse bada tap target) interactive elements par
-6. Semantic HTML: `<header> <main> <button>` — div-soup mana hai
-7. `aria-label` / `role` jahan visual label nahi (icon buttons)
+2. `@media` breakpoint — at least 1 (mobile-first enhancement)
+3. `:hover` AND `:focus-visible` states — on buttons/inputs/links
+4. `transition` — in at least 2 places (micro-interaction)
+5. `min-height:44px` (or larger tap targets) on interactive elements
+6. Semantic HTML: `<header> <main> <button>` — no div-soup
+7. `aria-label` / `role` where there is no visual label (icon buttons)
 8. `prefers-reduced-motion` media query respect
-9. CSS `min-width: 120` lines (single-file HTML me `<style>` ke andar) — thin/lazy CSS fail
+9. CSS at least 120 lines (inside `<style>` for single-file HTML) — thin/lazy CSS fails
 10. `box-sizing:border-box` reset + `font-family` system stack
-11. Layout: flex ya grid — dono nahi to absolute positioning mana hai
-12. Empty/loading state handling (JS apps me) — "kabhi blank screen nahi"
+11. Layout: flex or grid — absolute positioning is not acceptable
+12. Empty/loading state handling (in JS apps) — "never a blank screen"
 
 ## Self-check before claiming done
-- [ ] Kya maine design doc/research ki recommendations me se kam se kam 5 laagu kiye?
-- [ ] Kya sab 12 quality gates pass hote hain?
-- [ ] Kya maine file ko kholum aur har gate ko grep kiya?
-Aisa mat karo: basic HTML + 20 lines CSS likh ke "modern responsive UI" claim kar dena.
+- [ ] Did I apply at least 5 recommendations from the design doc/research?
+- [ ] Do all 12 quality gates pass?
+- [ ] Did I open the file and grep for every gate?
+Never do this: write basic HTML + 20 lines of CSS and claim it is a "modern responsive UI".

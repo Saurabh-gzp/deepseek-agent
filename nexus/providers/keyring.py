@@ -1,7 +1,7 @@
 """Multi-API-key manager with automatic failover.
 
-Kyunki ye autonomous agent hai, ek key fail hone par agent ruk nahi sakta.
-KeyRing har key ka health track karta hai aur automatically next healthy key
+Since this is an autonomous agent, it cannot stall when one key fails.
+KeyRing tracks the health of every key and automatically moves to the next healthy one
 par switch kar deta hai, user ko notify karte hue.
 
 Key states:
@@ -198,7 +198,7 @@ class KeyRing:
             return [k.to_dict() for k in self.keys]
 
     def remove_key(self, value: str) -> bool:
-        """Key ko live pool se hatao (KeyManager /key delete ke liye)."""
+        """Remove a key from the live pool (for KeyManager /key delete)."""
         with self._lock:
             v = (value or "").strip()
             for i, k in enumerate(self.keys):
