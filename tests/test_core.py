@@ -506,7 +506,7 @@ class TestRouterGuard:
     def test_delete_request_forced_to_orchestration(self):
         from nexus.orchestrator.engine import router_guard
         # the router model wrongly answered directly ("Deleted!") — the guard
-        # ko ise rokna hai kyunki request ek ACTION hai
+        # must stop it because the request is an ACTION
         d, overridden = router_guard(
             "delete todo.py from the workspace permanently",
             {"intent": "file_ops", "complexity": "simple", "needs_orchestration": False,
@@ -726,7 +726,7 @@ class TestDeniedPathFreeze:
         ok = ctx.approve("move_path", {"src": "todo.py", "dst": ".todo.py.trash"}, "worker")
         assert ok is False                    # blocked outright, no approval pane either
         assert asked == []                    # never nag the user repeatedly
-        # shell workaround bhi blocked
+        # shell workaround is blocked too
         ok = ctx.approve("run_shell", {"command": "mv todo.py .hidden"}, "worker")
         assert ok is False
 
@@ -764,12 +764,12 @@ class TestDeleteDenyBlocksMove:
         ctx.approval_handler = lambda *a: False
         denied = ctx.approve("delete_path", {"path": str(tmp_path / "squares.txt")}, "worker")
         assert denied is False
-        # agent move_path se hi rename karke chhupane ki koshis kare
-        ctx.approval_handler = lambda *a: True          # user aage haan bhi bole
+        # even if the agent tries to hide it via a move_path rename
+        ctx.approval_handler = lambda *a: True          # even if the user says yes later
         ok = ctx.approve("move_path", {"src": str(tmp_path / "squares.txt"),
                                        "dst": ".deleted"}, "worker")
         assert ok is False, "denial was circumvented via move_path!"
-        # relative path se bhi try kare to bhi blocked
+        # even a relative-path attempt is blocked
         ok = ctx.approve("move_path", {"src": "squares.txt", "dst": "x.txt"}, "worker")
         assert ok is False
 
@@ -806,7 +806,7 @@ class TestPlanPollutionAndEvasions:
             ("write_file", {"path": "squares.txt", "content": "x"}),
             ("run_shell", {"command": "ls -la && echo squares.txt"}),
         ]:
-            ctx.approval_handler = lambda *a: True   # user haan bole tab bhi
+            ctx.approval_handler = lambda *a: True   # even if the user says yes
             assert ctx.approve(tool, args, "worker") is False, (tool, args)
 
     def test_plan_context_excludes_task_summaries(self):
@@ -889,7 +889,7 @@ class TestV12:
         assert ok_abs_root.ok is False        # workspace ROOT me absolute write block
         ok_proj = fs.write_file("projects/calc/index.html", "<h1>hi</h1>")
         assert ok_proj.ok is True             # project folder me allowed
-        ok_rel = fs.write_file("app.js", "x") # relative -> scope me jaata hai
+        ok_rel = fs.write_file("app.js", "x") # relative -> resolves inside the scope
         assert ok_rel.ok is True
         assert (tmp_path / "projects" / "calc" / "index.html").exists()
         assert (tmp_path / "projects" / "calc" / "app.js").exists()
@@ -1128,7 +1128,7 @@ class TestWorkspaceCleanFixes:
             AssertionError("asked again!"))      # must never ask again
         for i in range(3):
             assert ctx.approve("delete_path", {"path": f"b{i}"}, "worker") is True
-        # run_shell rm bhi action-level always me aata hai
+        # run_shell rm is also covered by action-level always
         assert ctx.approve("run_shell", {"command": "rm x"}, "worker") is True
         assert calls == ["delete_path"]
 

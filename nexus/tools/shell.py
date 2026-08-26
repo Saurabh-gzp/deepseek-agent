@@ -20,7 +20,7 @@ DANGEROUS = [
 
 # --- deletion choke-point ------------------------------------------------
 # Deletion has exactly ONE path: the `delete_path` tool (which asks for human
-# hai). run_shell / run_python me file-deletion attempt == hard block.
+# approval). Any file-deletion attempt inside run_shell / run_python == hard block.
 # In live adversarial tests the agent tried all of these routes:
 #   rm, shred, find -delete, python -c os.remove, os.system('rm ...'), .trash move
 SHELL_DELETE = re.compile(
@@ -163,8 +163,8 @@ class ShellTools:
 
     def _device_probes(self) -> List[str]:
         """Battery/storage/memory/network — Termux termux-api + Linux /sys fallbacks.
-        Ye isliye: agent 'no access' ka jhooth na bole — device ke baare me
-        they run these probes (read-only, safe)."""
+        This exists so the agent never lies about 'no access' — for device
+        questions it runs these probes (read-only, safe)."""
         out: List[str] = []
 
         def probe(label: str, cmd: str) -> None:

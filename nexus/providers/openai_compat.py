@@ -1,6 +1,6 @@
 """Generic OpenAI-compatible provider (OpenAI, Groq, Together, Ollama, LM Studio...).
 
-Sirf config me `type: openai_compatible` + base_url + env_keys daalo, ready.
+Just set `type: openai_compatible` + base_url + env_keys in the config, done.
 """
 from __future__ import annotations
 

@@ -76,7 +76,7 @@ class NexusApp:
 
     # ------------------------------------------------------------------
     def _wire_completer(self) -> None:
-        """Slash-autocomplete: / pe saare commands, /skill pe ids, /agent pe names."""
+        """Slash-autocomplete: / shows all commands, /skill completes ids, /agent completes names."""
         try:
             from .completer import NexusCompleter, _HAS_PT
             if not _HAS_PT:
@@ -150,7 +150,7 @@ class NexusApp:
                 dup = set(km.load(prov)) | {k.value for k in
                                             getattr(reg.keyrings.get(prov), "keys", [])}
                 if newk in dup:
-                    self.ui.event("warn", "ye key pehle se added hai")
+                    self.ui.event("warn", "this key is already added")
                 else:
                     with self.ui.spinner(f"verifying against {prov} API…"):
                         ok, msg = self._test_key(prov, newk)
@@ -169,7 +169,7 @@ class NexusApp:
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text("done")
         if added:
-            self.ui.event("ok", f"setup poora — {added} key(s) ready. Agent shuru…")
+            self.ui.event("ok", f"setup complete — {added} key(s) ready. Starting the agent…")
             self.ui.print("")
 
     def start(self) -> None:
@@ -346,7 +346,7 @@ class NexusApp:
                         self.ui.event("warn", "invalid key number")
                         continue
                     if u["src"] != "keys/":
-                        self.ui.event("warn", f"{u['masked']} .env se aayi hai — "
+                        self.ui.event("warn", f"{u['masked']} came from .env — "
                                       "delete it from the .env file")
                         continue
                     if not self.ui.confirm(f"delete key {u['masked']} ?", False):

@@ -271,7 +271,7 @@ class AgentContext:
             return True
         if not allowed:
             # Rule: freeze the targets of any action the user denied —
-            # agent unhi paths ko rename/move karke denial circumvent na kar sake.
+            # so the agent cannot circumvent a denial by renaming/moving those paths.
             for p in self._action_targets(tool_name, args):
                 self.state.setdefault("denied_paths", set()).add(p)
         return allowed

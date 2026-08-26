@@ -74,8 +74,8 @@ BANNER_SMALL = "◤ N E X U S ◢"
 class Tick:
     """Live processing indicator + elapsed timer.
 
-    LLM call ke dauraan screen par '⣾ thinking · worker · 14s' type line
-    keeps running (background thread updates every 0.5s) — the TUI never
+    While an LLM call runs, a '⣾ thinking · worker · 14s' status line
+    keeps going (background thread updates every 0.5s) — the TUI never
     looks frozen (user feedback #3)."""
 
     def __init__(self, console: Console, label: str):

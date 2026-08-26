@@ -232,7 +232,7 @@ class Orchestrator:
         # ---- ROUTE
         self.ui.phase("ROUTE", "classifying request")
         tok0 = self.ctx.llm.stats.snapshot().get("total_tokens", 0)
-        # greeting / bahut chhota input => router ko memory context DO MAT
+        # greeting / very short input => do NOT give the router memory context
         if GREETING_RE.match(goal) or len(goal.split()) < 3:
             rctx = ""
         elif FOLLOWUP_REF.search(goal) and mem_ctx:
@@ -440,7 +440,7 @@ class Orchestrator:
                 hard = self.critic.hard_verify(task.title, task.acceptance, task.output, task_id)
                 task.score = float(hard.get("score", task.score))
                 task.verdict = hard.get("verdict", task.verdict)
-                # DONE sirf tab jab hard-model bhi pass/partial(≥60) bole.
+                # DONE only when the hard model also says pass/partial (≥60).
                 # Live bug #5: t1 was still marked "done" after 3 critic failures.
                 hard_v = hard.get("verdict")
                 if hard_v == "pass" or (hard_v == "partial" and task.score >= 60):

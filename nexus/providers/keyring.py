@@ -2,7 +2,7 @@
 
 Since this is an autonomous agent, it cannot stall when one key fails.
 KeyRing tracks the health of every key and automatically moves to the next healthy one
-par switch kar deta hai, user ko notify karte hue.
+and switches, notifying the user.
 
 Key states:
     HEALTHY    -> normal use

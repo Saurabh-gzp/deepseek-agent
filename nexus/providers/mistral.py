@@ -1,9 +1,9 @@
 """Mistral provider — pure-stdlib HTTP (Termux friendly, no heavy SDK).
 
 Har call automatically:
-  * KeyRing se healthy key uthata hai
+  * picks a healthy key from the KeyRing
   * on 429/401/5xx it switches to another key (user is notified)
-  * model fallback chain caller (LLMClient) handle karta hai
+  * the model fallback chain is handled by the caller (LLMClient)
 """
 from __future__ import annotations
 

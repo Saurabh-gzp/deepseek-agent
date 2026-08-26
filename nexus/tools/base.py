@@ -2,7 +2,7 @@
 
 Design principle (harness engineering):
     "Model proposes — harness executes."
-LLM sirf structured tool-call return karta hai; validation, permission check
+The LLM only returns structured tool calls; validation, permission checks
 and the execution harness performs it. This stops prompt-injection from
 escalation stops there.
 """

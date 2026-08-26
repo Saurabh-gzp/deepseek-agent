@@ -25,8 +25,8 @@ class FileSystemTools:
         self.write_scope: Optional[Path] = None   # per-goal project isolation
 
     def set_write_scope(self, subdir: Optional[str]) -> None:
-        """Engine per build-goal ye set karta hai — naye files sirf is
-        must be written inside the project folder (reads allowed anywhere)."""
+        """The engine sets this per build-goal — new files must be
+        written inside the project folder only (reads allowed anywhere)."""
         if subdir is None:
             self.write_scope = None
         else:
@@ -65,7 +65,7 @@ class FileSystemTools:
         return p
 
     def _resolve_write(self, path: str) -> Path:
-        """Write-scope active ho to relative paths project folder me jaate hain."""
+        """With write-scope active, relative paths resolve inside the project folder."""
         if self.write_scope is not None:
             s = str(path)
             sc = str(self.write_scope.relative_to(self.root))
@@ -75,7 +75,7 @@ class FileSystemTools:
         return self._resolve(path)
 
     def _write_allowed(self, p: Path) -> bool:
-        """write_scope active ho to naye writes sirf project folder me."""
+        """with write_scope active, new writes go inside the project folder only."""
         if self.write_scope is None:
             return True
         ps, ws = str(p), str(self.write_scope)

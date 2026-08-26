@@ -1,11 +1,11 @@
 """Slash-command autocomplete — type `/` and all commands show up with hints
 (like the big agents). prompt_toolkit is optional; without it
-to rich fallback chalega.
+a rich fallback runs instead.
 
 Features:
-  * "/"                                  → poora command menu + description
+  * "/"                                  → full command menu with descriptions
   * "/sk"                                → matching commands (/skills, /skill)
-  * "/skill web_development/<tab>"       → skill ids complete hote hain
+  * "/skill web_development/<tab>"       → completes skill ids
   * "/agent coder <tab>"                 → agent names
   * "/mode smart <tab>"                  → modes
   * arrow-up/down history (persist in .nexus/history)
@@ -25,24 +25,24 @@ except ImportError:                        # pragma: no cover
 
 
 COMMANDS: Dict[str, str] = {
-    "/help": "saare commands dikhao",
+    "/help": "show all commands",
     "/key": "🔑 key manager menu (add/delete/test keys)",
     "/keys": "key health table (quick view)",
     "/status": "usage stats — calls, tokens, models",
     "/skills": "skills list/search",
-    "/skill": "ek skill ka poora playbook dekho",
+    "/skill": "show a skill's full playbook",
     "/rag": "knowledge base stats",
     "/index": "index a file/folder into RAG",
     "/forget-index": "RAG index clear",
     "/memory": "memory stats + facts",
     "/remember": "save a preference (k=v)",
-    "/sessions": "purane sessions list",
+    "/sessions": "list past sessions",
     "/resume": "resume a session",
     "/tools": "tools and which agent gets what",
-    "/projects": "workspace ke project folders",
+    "/projects": "project folders in the workspace",
     "/plan": "plan only, no execution",
     "/auto": "force full autonomous orchestration",
-    "/agent": "ek specific agent solo chalao",
+    "/agent": "run one specific agent solo",
     "/cd": "change the workspace",
     "/mode": "approval mode (smart/always/never)",
     "/verbose": "step-by-step output toggle",

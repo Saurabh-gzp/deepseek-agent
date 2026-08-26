@@ -4,7 +4,7 @@ Har agent:
   * keeps its own role/model chain
   * may use only its allowed tools (least privilege)
   * runs within a step budget and timeout
-  * skills ko progressive disclosure se load karta hai
+  * loads skills with progressive disclosure
 """
 from __future__ import annotations
 

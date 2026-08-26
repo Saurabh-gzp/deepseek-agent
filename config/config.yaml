@@ -14,7 +14,7 @@ app:
 # ----------------------------------------------------------
 # PROVIDERS  -> add new providers here (openai/groq/etc.)
 # ----------------------------------------------------------
-# API keys ka folder — /key menu yahin save karta hai (gitignored, chmod 600)
+# Folder for API keys — the /key menu saves here (gitignored, chmod 600)
 keys:
   dir: "./keys"
 
@@ -25,7 +25,7 @@ providers:
     enabled: true
     type: mistral                    # nexus/providers/mistral.py
     base_url: "https://api.mistral.ai/v1"
-    # keys env se aate hain: MISTRAL_API_KEY, MISTRAL_API_KEY_2 ... ya keys.json
+    # keys come from the environment: MISTRAL_API_KEY, MISTRAL_API_KEY_2 ... or keys.json
     env_keys: ["MISTRAL_API_KEY", "MISTRAL_API_KEY_2", "MISTRAL_API_KEY_3"]
     timeout: 180
     max_retries_per_key: 2
@@ -168,7 +168,7 @@ safety:
       - "chmod -R 777 /"
       - "> /dev/sda"
     timeout: 120
-  sandbox_root_only: true       # writes sirf workspace ke andar
+  sandbox_root_only: true       # writes stay inside the workspace only
 
 # ----------------------------------------------------------
 # RAG
@@ -223,7 +223,7 @@ tools:
 # KEY FAILOVER
 # ----------------------------------------------------------
 failover:
-  notify_user: true              # key switch hone par user ko batao
+  notify_user: true              # tell the user when keys switch
   cooldown_seconds: 60           # rate-limited key ko itni der rest
   hard_fail_cooldown: 600        # invalid/quota key ka lamba cooldown
   max_key_rotations_per_call: 6

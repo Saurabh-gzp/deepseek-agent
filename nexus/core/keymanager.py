@@ -6,8 +6,8 @@ Design (user ke idea ka robust version):
       openai.json      (jab enable ho)
 
 * Per-provider file, plain JSON, chmod 600 (folder 700)
-* Startup par registry in files ko env-keys ke saath merge karta hai (dedup)
-* /key menu se live add/delete — bina restart ke KeyRing me sync
+* At startup the registry merges these files with env keys (dedup)
+* live add/delete via the /key menu — synced into KeyRing without a restart
 * Purana .nexus/keys.json automatic migrate ho jaata hai
 """
 from __future__ import annotations
@@ -118,14 +118,14 @@ class KeyManager:
                     moved += 1
         if moved:
             try:
-                legacy_file.unlink()          # keys ab keys/ me hain
+                legacy_file.unlink()          # keys now live in keys/
             except Exception:
                 pass
         return moved
 
 
 def unified_keys(file_keys: List[str], ring) -> List[dict]:
-    """keys/ + .env — sabhi keys ek numbered list me (dedup, source tag ke saath).
+    """keys/ + .env — all keys in one numbered list (dedup, with a source tag).
 
     Returns [{"n":1, "value":"sk-..", "masked":"sk-…", "src":"keys/"|".env"}, ...]
     """

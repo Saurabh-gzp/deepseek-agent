@@ -1,7 +1,7 @@
 """Provider abstraction layer.
 
 To add a new provider, just extend `BaseProvider` and
-`nexus/providers/registry.py` me register kar do. Baaki system unchanged.
+register it in `nexus/providers/registry.py`. The rest of the system stays unchanged.
 """
 from __future__ import annotations
 
