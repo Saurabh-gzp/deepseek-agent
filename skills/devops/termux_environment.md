@@ -2,7 +2,7 @@
 name: Termux Environment
 description: Work correctly inside Termux on Android — package management, storage, permissions, background jobs, networking, memory limits and common build failures. Use whenever running commands, installing packages, scheduling jobs or debugging environment errors on a phone.
 tags: [termux, android, mobile, environment, packages, cron, storage]
-version: 1.0
+version: 2.0
 agents: ["coder", "worker", "supervisor", "critic"]
 ---
 
@@ -108,3 +108,78 @@ termux-toast "quick message"
 4. Long commands: add explicit timeouts and stream output, don't buffer 100 MB.
 5. Tell the user when something genuinely can't run on a phone (Docker, Chromium,
    CUDA, heavy training) instead of failing three times first.
+
+## Device & hardware — termux-api (the RIGHT way)
+Requires BOTH: the `Termux:API` Android app (F-Droid) AND `pkg install termux-api`.
+All commands output JSON — parse with python, e.g.
+`termux-battery-status | python3 -c "import sys,json; print(json.load(sys.stdin)['percentage'])"`.
+
+| Need | Command |
+|---|---|
+| Battery (%, temp, health, plugged) | `termux-battery-status` |
+| Storage info | `termux-storage-get` (file picker) / `df -h` for sizes |
+| Wi-Fi state | `termux-wifi-connectioninfo` · scan list: `termux-wifi-scaninfo` |
+| GPS location | `termux-location` (add `-p gps` or `-p network` for provider) |
+| Sensors (live) | `termux-sensor -l` then `termux-sensor -s <name> -d <ms> -n <count>` |
+| Clipboard | `termux-clipboard-get` / `termux-clipboard-set "text"` |
+| Notification | `termux-notification --title T --content C` |
+| Torch / vibrate | `termux-torch on` / `termux-vibrate -d 500` |
+| Screen brightness | `termux-brightness 150` (0–255) |
+| Volume | `termux-volume music 10` |
+| Camera | `termux-camera-photo -c 0 photo.jpg` (info: `termux-camera-info`) |
+| Mic recording | `termux-microphone-record -f rec.m4a -l 30` |
+| TTS speak | `termux-tts-speak "done"` |
+| Call/SMS | `termux-telephony-call` / `termux-sms-send -n NUMBER MSG` (log: `termux-call-log`, `termux-sms-list`) |
+| Download/share/open | `termux-download URL` / `termux-share file` / `termux-open file_or_url` |
+| Device info | `termux-telephony-deviceinfo`, `termux-info`, `termux-torch`, `getprop ro.product.model` |
+
+If a `termux-*` command prints nothing or errors: the Termux:API app is missing —
+say so and fall back to `/sys` and `df`.
+
+## Storage — what actually works on Android
+- **Sizes:** `df -h` — look at `/storage/emulated` and `/data` rows.
+  `df | grep storage` filters it fast. THIS is the source for "how much storage".
+- **Folder sizes:** `du -sh ~/storage/shared/* 2>/dev/null` — needs storage
+  permission (below); scanning all of /sdcard is SLOW — target subfolders,
+  add a timeout, and expect `Permission denied` on some dirs (Android 11+
+  scoped storage). ONE failed `du` is enough — do not retry it blindly.
+- **Shared files:** must run `termux-setup-storage` ONCE (user taps Allow);
+  it creates `~/storage/{shared,downloads,pictures,dcim,music,movies,external}`.
+  `~/storage/shared` = `/storage/emulated/0` (= `/sdcard`).
+- **SD card:** writable only at
+  `/storage/XXXX-XXXX/Android/data/com.termux/files/` (Android rule).
+
+## Commands that DO NOT exist in Termux — never retry them
+`lsblk`, `blockdev`, `fdisk` (blocked), `systemctl`, `service`, `sudo`, `su`
+(no root), `chmod` on /sdcard (ignored by fuse), `/dev/block/*` access,
+`dmesg` (blocked). If `command not found` (exit 127): the package isn't
+installed — try `pkg install <tool>` ONCE, and if apt can't provide it,
+STOP and report honestly. `sudo` doesn't exist — there is no root.
+
+## Package management
+```bash
+pkg update && pkg upgrade -y
+pkg install <name>        # e.g. python, git, nodejs, openssh, termux-api, jq, nano
+pkg search <term>         # before "package not found" conclusions
+pip install --upgrade pip wheel   # before pip installs (avoid legacy-setup crashes)
+```
+Heavy builds (numpy/pandas on old devices): prefer `pkg install python-numpy`
+over `pip install numpy`.
+
+## Networking
+`ping -c 4 host` · `curl`/`wget` · `ip addr` (not ifconfig by default) ·
+`ss -tuln` (netstat may need net-tools) · `termux-wifi-connectioninfo`.
+Android forbids privileged ports (<1024) and raw sockets for some tools.
+
+## Background & keep-alive
+- `nohup cmd >/dev/null 2>&1 &` for background; `termux-wake-lock` stops
+  Android from freezing the session during long work (`termux-wake-unlock` after).
+- Long-running servers ALWAYS in background, then `curl localhost:PORT` to verify.
+- Scheduled jobs: `termux-job-scheduler` or `crond` from `pkg install cronie`.
+
+## Reality checklist before reporting device facts
+1. Did the command ACTUALLY run and return data? Paste the REAL output.
+2. Numbers in the report must come from tool output THIS run — never estimates,
+   "example outputs" or remembered specs (e.g. "64GB" without a df row proving it).
+3. If everything failed, say exactly what failed and why — an honest
+   "couldn't read X because Y" beats a made-up table.

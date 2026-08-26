@@ -89,7 +89,8 @@ class Tick:
     def _render(self) -> None:
         el = time.time() - self._t0
         m, s = int(el) // 60, int(el) % 60
-        txt = f"[muted]{self.label} · {m}:{s:02d}[/]" if m else f"[muted]{self.label} · {s}s[/]"
+        base = f"{self.label} · {m}:{s:02d}" if m else f"{self.label} · {s}s"
+        txt = f"[muted]{base} · Ctrl+C = stop[/]"
         try:
             self._sp.update(txt)
         except Exception:
@@ -103,7 +104,8 @@ class Tick:
     def __enter__(self):
         if self.console.is_terminal:
             self._t0 = time.time()
-            self._sp = self.console.status(f"[muted]{self.label} · 0s[/]", spinner="dots")
+            self._sp = self.console.status(
+                f"[muted]{self.label} · 0s · Ctrl+C = stop[/]", spinner="dots")
             self._sp.start()
             self._thread = threading.Thread(target=self._loop, daemon=True)
             self._thread.start()
@@ -308,7 +310,8 @@ class UI:
                 from prompt_toolkit.formatted_text import HTML as PTHTML
                 text = pt.prompt(PTHTML(
                     f"<ansicyan><b>{plain or '❯'}</b></ansicyan> "),
-                    is_password=secret)
+                    is_password=secret,
+                    bottom_toolbar="CTRL+C = Stop · /help for commands")
                 return text if (text or not default) else default
             except Exception:
                 pass                                        # fallback niche
@@ -333,6 +336,8 @@ class UI:
 
     # ---------------- progress ----------------
     def spinner(self, text: str):
+        if "Ctrl+C" not in text:
+            text = f"{text} · [muted]Ctrl+C = stop[/]"
         return self.console.status(f"[accent]{text}[/]", spinner="dots")
 
     def progress(self) -> Progress:

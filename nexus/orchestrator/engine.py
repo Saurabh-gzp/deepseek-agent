@@ -147,6 +147,10 @@ class Orchestrator:
         self.critic = CriticAgent(ctx)
         self._agent_cache: Dict[str, Any] = {}
         self.cancelled = False
+        try:
+            self.ctx.state.pop("cancelled", None)
+        except Exception:
+            pass
 
         self.max_parallel = int(self.config.get("autonomy.max_parallel_agents", 3))
         self.max_retries = int(self.config.get("autonomy.max_retries", 2))
@@ -531,3 +535,7 @@ class Orchestrator:
 
     def cancel(self) -> None:
         self.cancelled = True
+        try:
+            self.ctx.state["cancelled"] = True   # agents check this every step
+        except Exception:
+            pass

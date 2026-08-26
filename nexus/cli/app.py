@@ -186,6 +186,8 @@ class NexusApp:
         rag_n = self.ctx.rag.store.count() if self.ctx.rag else 0
         self.ui.print(f"[muted]  {n_sk} skills · {len(self.ctx.tools.names())} tools · "
                       f"{rag_n} KB chunks · approval={self.config.get('safety.approval_mode')}[/]\n")
+        self.ui.print("[muted]  Ctrl+C stops a running task — then type a correction; "
+                      "your conversation context is always kept.[/]\n")
         if self.ctx.memory:
             self.ctx.memory.start_session()
         if self.config.get("rag.auto_index_workspace", True) and self.ctx.rag:
@@ -205,9 +207,32 @@ class NexusApp:
             self.ui.event("warn", f"auto-index skipped: {str(e)[:70]}")
 
     # ------------------------------------------------------------------
+    def _install_ctrl_c(self) -> None:
+        """Ctrl+C during a run: 1st = graceful stop (finish-safe), 2nd = force.
+        Idle at the prompt: Ctrl+C still exits the REPL (standard behaviour)."""
+        import signal
+
+        def handler(signum, frame):  # noqa: ARG001
+            if getattr(self, "_running", False):
+                self.orchestrator.cancel()
+                # NOTE: never use rich/console here — a live spinner is active and
+                # console.print from a signal handler crashes the process.
+                try:
+                    os.write(1, b"\n  \xe2\x8f\xb9 stopping... (Ctrl+C again = force)\n")
+                except Exception:
+                    pass
+            else:
+                raise KeyboardInterrupt
+
+        try:
+            signal.signal(signal.SIGINT, handler)
+        except (ValueError, OSError):
+            pass
+
     def repl(self) -> None:
         self.maybe_first_run_setup()
         self.start()
+        self._install_ctrl_c()
         while self.running:
             try:
                 line = self.ui.ask("\n[user]nexus ❯[/]").strip()
@@ -217,15 +242,24 @@ class NexusApp:
             if not line:
                 continue
             try:
+                self._running = True
                 self.dispatch(line)
             except KeyboardInterrupt:
                 self.orchestrator.cancel()
-                self.ui.print("\n[warn]⏹ cancelled[/]")
+                self.ui.print("\n[warn]⏹ stopped by user — type a message to redirect "
+                              "or a new task (context is kept)[/]")
             except Exception as e:  # noqa: BLE001
                 self.ui.error(f"{type(e).__name__}: {e}")
                 if os.getenv("NEXUS_DEBUG"):
                     import traceback
                     self.ui.print(traceback.format_exc())
+            finally:
+                self._running = False
+                try:
+                    self.ctx.state.pop("cancelled", None)
+                    self.orchestrator.cancelled = False
+                except Exception:
+                    pass
 
     # ------------------------------------------------------------------
     def dispatch(self, line: str) -> None:

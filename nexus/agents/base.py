@@ -129,6 +129,12 @@ class BaseAgent:
         specs = self.tool_specs()
 
         for i in range(budget):
+            # user pressed Ctrl+C → stop this agent cleanly at the next step
+            if self.ctx.state.get("cancelled"):
+                return AgentOutcome(self.agent_name, False,
+                                    self._partial(steps) or "Stopped by user",
+                                    steps, tokens, model_used, time.time() - t0,
+                                    error="cancelled by user")
             if time.time() - t0 > timeout:
                 return AgentOutcome(self.agent_name, False,
                                     self._partial(steps) or "Timed out",

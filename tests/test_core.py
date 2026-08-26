@@ -1170,3 +1170,30 @@ class TestWorkspaceCleanFixes:
         # resume works with the resolved id
         assert ms.resume_session(ms.resolve_session("2")) is True
         assert ms.session_id == s1
+
+    def test_agent_loop_respects_cancel_flag(self):
+        """Ctrl+C sets ctx.state['cancelled'] → agent run() exits immediately."""
+        from nexus.agents.specialists import WorkerAgent
+        from nexus.core.context import AgentContext
+        ctx = AgentContext.__new__(AgentContext)
+        ctx.state = {"cancelled": True}
+        ag = WorkerAgent.__new__(WorkerAgent)
+        ag.ctx = ctx
+        ag.agent_name = "worker"
+        # fake the pre-loop state by calling run and expecting instant abort
+        class _R:
+            def __init__(self): self.calls = 0
+            def chat(self, *a, **k):
+                self.calls += 1
+                raise AssertionError("LLM must not be called when cancelled")
+        ag.llm = _R()
+        ag.tool_specs = lambda: []
+        ag.build_system = lambda *a, **k: "sys"
+        out = ag.run("do something")
+        assert out.ok is False and "user" in (out.error or "").lower()
+
+    def test_spinner_and_prompts_are_english(self):
+        from nexus.cli.ui import UI
+        import inspect
+        src = inspect.getsource(UI)
+        assert "Ctrl+C = stop" in src          # live-indicator hint present

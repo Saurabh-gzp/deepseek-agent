@@ -327,7 +327,10 @@ class CoderAgent(BaseAgent):
         "termux-wifi-connectioninfo...) via run_shell for device data.\n"
         "- Long-running servers: start them in background "
         "('nohup python -m http.server 8080 >/dev/null 2>&1 &') then curl to verify — "
-        "a foreground server will block and time out."
+        "a foreground server will block and time out.\n"
+        "- REPORT ONLY REAL TOOL OUTPUT. NEVER write 'example output', 'sample', or "
+        "invented values in place of actual command results — if a command failed or "
+        "was unavailable, SAY SO. Fabricated output is the worst failure mode."
     )
 
     def __init__(self, ctx, quick: bool = False):
@@ -350,7 +353,11 @@ class CriticAgent(BaseAgent):
         "  • run_shell                          → run commands, tests, `python script.py`\n"
         "  • run_python                         → execute code and check the output\n"
         "Never claim you are 'unable to execute' or that you 'lack tool access' — you have it. "
-        "If a tool call errors, report THAT specific error as the issue.\n\n"
+        "If a tool call errors, report THAT specific error as the issue.\n"
+        "FABRICATION CHECK: if the result contains 'example output', 'sample values', "
+        "'replace with actual', or ellipsis-instead-of-real-output for a command that "
+        "WAS run (or should have been), the verdict is FAIL — invented numbers are "
+        "worse than an honest failure.\n\n"
         "Procedure (max 4 tool calls, be efficient):\n"
         "1. Check the artifacts named in the result actually exist and contain what was claimed.\n"
         "1b. If the task names exact files/paths (e.g. 'todo.py'), they must exist at that exact "
