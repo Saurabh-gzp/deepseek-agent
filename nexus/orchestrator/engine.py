@@ -430,7 +430,12 @@ class Orchestrator:
             m = _START_SERVER_SPEC.search(text)
             if m:
                 cmd, port, marker = m.group(1), int(m.group(2)), m.group(3)
-            else:
+                # v1.8.5: a spec pointing at a MISSING dir can never serve (live
+                # run #4: --directory projects/varanasi-hub didn't exist -> 404).
+                dm = _re.search(r"--directory\s+(\S+)", cmd)
+                if dm and not (Path(self.ctx.config.workspace) / dm.group(1)).exists():
+                    m = None
+            if m is None:                       # invalid/absent spec -> heuristic
                 base = Path(self.ctx.config.workspace) / "projects"
                 if not base.exists():
                     return False
@@ -705,7 +710,12 @@ class Orchestrator:
             plan.pop("project", None)
             self._clear_project_scope()
             return
-        slug = str(plan.get("project") or "").strip().lower().replace(" ", "-")
+        # v1.8.5: if the GOAL itself names projects/<slug>/, that slug wins —
+        # live run #4: goal said varanasi-hub, scope made complete-varanasi-digital
+        # and the acceptance check kept failing forever.
+        gm = _re.search(r"projects/([A-Za-z0-9_-]+)", goal)
+        slug = (gm.group(1).strip().lower() if gm else
+                str(plan.get("project") or "").strip().lower().replace(" ", "-"))
         creates = any(t.agent in ("worker", "coder") for t in dag.order())
         if not slug and creates and ACTION_VERB.search(goal):
             words = [w for w in _re.sub(r"[^a-z0-9\s]", " ", goal.lower()).split()

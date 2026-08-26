@@ -1493,3 +1493,84 @@ class TestV184:
             for n, v in saved.items():
                 if v is not None:
                     os.environ[n] = v
+
+
+class TestV185:
+    """v1.8.5: hard-run fixes — goal-path slug wins, plan retry before fallback,
+    deterministic split fallback, parachute refuses a spec pointing at a missing dir."""
+
+    def _eng(self, tmp_path):
+        from nexus.orchestrator.engine import Orchestrator
+        import types
+        eng = Orchestrator.__new__(Orchestrator)
+        eng.ctx = types.SimpleNamespace(
+            state={}, fs=FileSystemTools(tmp_path),
+            ui=types.SimpleNamespace(event=lambda *a: None))
+        eng.ui = eng.ctx.ui
+        return eng
+
+    def test_goal_path_forces_exact_slug(self, tmp_path):
+        """run #4: goal said projects/varanasi-hub, engine made
+        projects/complete-varanasi-digital -> acceptance failed forever."""
+        from nexus.orchestrator.dag import Task, TaskDAG
+        eng = self._eng(tmp_path)
+        dag = TaskDAG()
+        dag.add(Task(id="t1", title="build", description="x", agent="coder",
+                     depends_on=[], acceptance="ok"))
+        eng._apply_project_scope(
+            "make Varanasi Digital Hub in projects/varanasi-hub/",
+            {"project": "complete-varanasi-digital"}, dag)
+        assert eng.ctx.state.get("project_dir") == "projects/varanasi-hub"
+        assert "projects/varanasi-hub" in dag.get("t1").description
+        assert "complete-varanasi-digital" not in dag.get("t1").description
+
+    def test_parachute_refuses_missing_directory_spec(self, tmp_path):
+        """run #4: spec --directory projects/varanasi-hub (missing) -> 404; the
+        parachute must NOT blindly honor a spec whose dir does not exist."""
+        import inspect
+        from nexus.orchestrator import engine as engmod
+        src = inspect.getsource(engmod.Orchestrator._host_parachute)
+        assert "MISSING dir" in src and "m = None" in src
+        assert "cands = sorted(base.rglob" in src  # heuristic still there
+
+    def test_fallback_plan_is_deterministic_split(self):
+        """one-worker mega-task is dead: fallback now mirrors the normal DAG."""
+        from nexus.agents.specialists import SupervisorAgent
+        sup = SupervisorAgent.__new__(SupervisorAgent)
+        fp = sup._fallback_plan(
+            "research the top 2026 museums in Varanasi, build a project website in "
+            "projects/varanasi-hub/ with contact form, then test and host it",
+            "empty task list")
+        assert fp["_fallback"] is True
+        ids = [t["id"] for t in fp["tasks"]]
+        assert ids == ["t1", "t2", "t3"], ids
+        assert [t["agent"] for t in fp["tasks"]] == ["researcher", "coder", "coder"]
+        assert fp["tasks"][1]["depends_on"] == ["t1"]
+        assert fp["tasks"][2]["depends_on"] == ["t2"]
+        assert "Single-agent" not in fp["strategy"]
+
+    def test_fallback_without_research_or_verify_is_two_tasks(self):
+        from nexus.agents.specialists import SupervisorAgent
+        fp = SupervisorAgent.__new__(SupervisorAgent)._fallback_plan(
+            "write a fibonacci script in projects/fib/ and verify it runs",
+            "llm down")
+        ids = [t["id"] for t in fp["tasks"]]
+        assert ids == ["t1", "t2"], ids
+        assert [t["agent"] for t in fp["tasks"]] == ["coder", "coder"]
+
+    def test_plan_retries_once_before_fallback(self):
+        import inspect
+        from nexus.agents.specialists import SupervisorAgent
+        src = inspect.getsource(SupervisorAgent.plan)
+        assert "for attempt in range(2)" in src
+        assert src.count("continue") >= 2  # one retry on exception / bad JSON
+
+    def test_goal_slug_precedence_over_plan_slug(self, tmp_path):
+        """even when the supervisor sets NO project, a goal path still scopes."""
+        from nexus.orchestrator.dag import Task, TaskDAG
+        eng = self._eng(tmp_path)
+        dag = TaskDAG()
+        dag.add(Task(id="t1", title="b", description="x", agent="worker",
+                     depends_on=[], acceptance="ok"))
+        eng._apply_project_scope("fix the site at projects/my-site/", {}, dag)
+        assert eng.ctx.state.get("project_dir") == "projects/my-site"

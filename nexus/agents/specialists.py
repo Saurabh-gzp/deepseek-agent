@@ -246,16 +246,25 @@ class SupervisorAgent(BaseAgent):
         blocks.append(f"Workspace: {self.config.workspace}")
 
         prompt = "\n\n".join(blocks)
-        raw = ""
-        try:
-            raw = self.llm.ask(self.role_key, prompt, system=self.PLAN_SYSTEM,
-                               response_format={"type": "json_object"})
-        except Exception:
+        # v1.8.5: retry planning ONCE before the fallback — a flaky call must not
+        # collapse a 4-phase goal into a single mega-task (live run #4).
+        plan: Optional[Dict[str, Any]] = None
+        for attempt in range(2):
+            raw = ""
             try:
-                raw = self.llm.ask(self.role_key, prompt, system=self.PLAN_SYSTEM)
-            except Exception as e:  # noqa: BLE001
-                return self._fallback_plan(goal, str(e))
-        plan = extract_json(raw, ["tasks"])
+                raw = self.llm.ask(self.role_key, prompt, system=self.PLAN_SYSTEM,
+                                   response_format={"type": "json_object"})
+            except Exception:
+                try:
+                    raw = self.llm.ask(self.role_key, prompt, system=self.PLAN_SYSTEM)
+                except Exception as e:  # noqa: BLE001
+                    if attempt == 0:
+                        continue
+                    return self._fallback_plan(goal, str(e))
+            plan = extract_json(raw, ["tasks"])
+            if not plan and attempt == 0:
+                continue
+            break
         if not plan:
             return self._fallback_plan(goal, "no valid JSON in plan output")
         return self._sanitize(plan, goal)
@@ -304,13 +313,48 @@ class SupervisorAgent(BaseAgent):
         return plan
 
     def _fallback_plan(self, goal: str, reason: str) -> Dict[str, Any]:
+        """v1.8.5: deterministic SPLIT fallback, never one mega-task. Mirrors the
+        normal plan shape: research (if the goal asks) -> implement -> verify.
+        Live run #4: an old one-worker fallback crammed a 4-phase goal into one
+        coder task and died at the task time budget."""
+        tasks: List[dict] = []
+        import re as _re2
+        if _re2.search(r"research|search the internet|web search|find and compare|"
+                       r"explore|report", goal, _re2.I):
+            tasks.append({
+                "id": "t1", "title": "Research the topic on the web",
+                "description": (goal + "\n\nFocus: research only. Search the web, fetch "
+                               "pages, and write a sourced report to "
+                               "projects/<slug>/research.md with >=3 concrete, named "
+                               "recommendations (cite each)."),
+                "agent": "researcher", "depends_on": [], "skill": "research/deep_research",
+                "acceptance": ("projects/<slug>/research.md exists with >=3 concrete "
+                               "recommendations and citations"),
+                "parallel_safe": True})
+        main_id = "t2" if tasks else "t1"
+        tasks.append({
+            "id": main_id, "title": goal[:80],
+            "description": (goal + "\n\nFocus: implement everything the goal demands, "
+                           "into projects/<slug>/. Read prior task files first."),
+            "agent": "coder", "depends_on": [tasks[0]["id"]] if tasks else [],
+            "skill": "", "acceptance": "All deliverables the goal lists exist and work",
+            "parallel_safe": True})
+        if _re2.search(r"test|host|verify|serve", goal, _re2.I):
+            vid = f"t{len(tasks) + 1}"
+            tasks.append({
+                "id": vid, "title": "Verify, test and host per the goal",
+                "description": (goal + "\n\nFocus: verification. Run the tests, host the "
+                               "result with start_server(command=..., port=..., marker=...) "
+                               "and verify HTTP 200 + marker."),
+                "agent": "coder", "depends_on": [main_id], "skill": "",
+                "acceptance": ("Tests pass and/or start_server shows HTTP 200 + the "
+                               "goal's marker, with the verified URL reported"),
+                "parallel_safe": True})
         return {
             "goal_restated": goal[:200],
-            "strategy": f"Single-agent fallback plan ({reason[:80]}).",
-            "tasks": [{"id": "t1", "title": goal[:80], "description": goal, "agent": "worker",
-                       "depends_on": [], "skill": "", "acceptance": "Goal addressed",
-                       "parallel_safe": True}],
-            "final_deliverable": "Best-effort completion",
+            "strategy": f"Detached fallback plan ({reason[:80]}).",
+            "tasks": tasks,
+            "final_deliverable": "Completed goal with artifacts in the workspace",
             "_fallback": True,
         }
 
