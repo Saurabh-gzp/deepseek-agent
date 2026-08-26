@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.8.7] — goal-level hosting parachute + no DIY host-guide + honest files
+
+**Trigger (parity TUI, 8 keys, 4-phase Varanasi Digital Hub):** 913.6s,
+`unverified`, t3 hit the 900s overall cap so t4 never started. Final box
+honestly said hosting NOT verified, but then told the user to run
+`python3 -m http.server 8000` themselves, and denied that `test_contact.py`
+existed (it did; 8/8 pass from the project dir). Fixes:
+
+1. **Goal-level parachute** after the DAG ends: if the USER GOAL asked to
+   host and there is still no `start_server` evidence, the harness hosts the
+   newest `projects/*/index.html` even when the host-task never ran.
+2. **DIY host-guide banned twice** — FACTS + deterministic `_sanitize_final`
+   strip `python -m http.server` / "run the server yourself" lines.
+3. **Workspace file FACTS** — synthesizer is given the real file list and
+   must not claim existing files were never created.
+4. **`python` → `python3`** rewrite in `run_shell` (bare `python` is often
+   missing; live tests looked failed).
+5. **`--version`** reads `app.version` (was stuck at 1.4.2).
+6. Default **`overall_timeout_seconds` 900 → 1500** so a 4-phase research
+   + build + test + host run can finish.
+
 ## [1.8.3] — hosting can never be faked: verified-by-construction
 
 **Trigger (8-key live run, 4-phase 'Varanasi Digital Hub'):** completed 4/4 tasks

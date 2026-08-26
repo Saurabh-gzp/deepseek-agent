@@ -1647,6 +1647,63 @@ class TestV186Watchdog:
         assert "stall > 360" in src and "NO_PROGRESS" in src
 
 
+class TestV187:
+    """v1.8.7: goal-level parachute, DIY host-guide strip, python3 rewrite."""
+
+    def test_goal_needs_host_from_user_goal(self):
+        from nexus.orchestrator.engine import Orchestrator
+        assert Orchestrator._goal_needs_host("host it locally and verify HTTP 200")
+        assert not Orchestrator._goal_needs_host("summarise this markdown file")
+
+    def test_sanitize_strips_diy_http_server(self):
+        from nexus.orchestrator.engine import Orchestrator
+        import types
+        eng = Orchestrator.__new__(Orchestrator)
+        eng._server_evidence = []
+        raw = ("Site built.\n"
+               "To host: run this yourself\n"
+               "python3 -m http.server 8000\n"
+               "Then visit http://localhost:8000\n")
+        out = eng._sanitize_final(raw, True)
+        assert "http.server" not in out
+        assert "NOT verified" in out
+
+    def test_sanitize_keeps_text_when_verified(self):
+        from nexus.orchestrator.engine import Orchestrator
+        eng = Orchestrator.__new__(Orchestrator)
+        eng._server_evidence = ["HTTP 200 marker found"]
+        raw = "Hosted at http://127.0.0.1:8000 — verified."
+        assert eng._sanitize_final(raw, True) == raw
+
+    def test_workspace_facts_lists_existing_files(self, tmp_path):
+        from nexus.orchestrator.engine import Orchestrator
+        import types
+        (tmp_path / "projects" / "hub").mkdir(parents=True)
+        (tmp_path / "projects" / "hub" / "test_contact.py").write_text("x")
+        (tmp_path / "projects" / "hub" / "index.html").write_text("<title>T</title>")
+        eng = Orchestrator.__new__(Orchestrator)
+        eng.config = types.SimpleNamespace(workspace=tmp_path)
+        facts = eng._workspace_facts()
+        assert "test_contact.py" in facts
+        assert "index.html" in facts
+        assert "NEVER say these are missing" in facts
+
+    def test_bare_python_rewritten_to_python3(self, tmp_path):
+        sh = ShellTools(tmp_path, timeout=20)
+        assert sh._prefer_python3("python test_contact.py") == "python3 test_contact.py"
+        assert sh._prefer_python3("python3 test_contact.py") == "python3 test_contact.py"
+        r = sh.run_shell("python -c 'print(41+1)'")
+        assert r.ok and "42" in r.output
+
+    def test_honesty_forbids_diy_and_missing_files(self):
+        src = open("nexus/agents/specialists.py", encoding="utf-8").read()
+        assert "hosting guide = forbidden" in src
+        assert "WORKSPACE FILES" in src
+        es = open("nexus/orchestrator/engine.py", encoding="utf-8").read()
+        assert "goal-level hosting parachute" in es
+        assert "_sanitize_final" in es
+
+
 class FakeResp:
     def __init__(self, body: bytes):
         self._body = body

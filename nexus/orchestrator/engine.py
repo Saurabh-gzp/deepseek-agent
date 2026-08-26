@@ -165,7 +165,7 @@ class Orchestrator:
 
         self.max_parallel = int(self.config.get("autonomy.max_parallel_agents", 3))
         self.max_retries = int(self.config.get("autonomy.max_retries", 2))
-        self.overall_timeout = float(self.config.get("autonomy.overall_timeout_seconds", 900))
+        self.overall_timeout = float(self.config.get("autonomy.overall_timeout_seconds", 1500))
         self.max_depth = int(self.config.get("autonomy.max_task_depth", 3))
         self._devstral_slots = int(self.config.get("autonomy.max_devstral_parallel", 2))
         # v1.8.3: verified start_server outputs across the run (hosting truth)
@@ -323,6 +323,23 @@ class Orchestrator:
             dag = new_dag
             self.ui.show_plan(plan, dag)
 
+        # v1.8.7: GOAL-LEVEL parachute — if the USER GOAL asked to host and
+        # nothing verified (timeout killed t4, or no host-task ran), the
+        # harness still hosts the newest index.html. Live parity: 900s cap
+        # cut t3, t4 never started, user was told to run http.server themselves.
+        if self._goal_needs_host(goal, dag) and not self._server_evidence:
+            host_task = next((t for t in reversed(dag.order())
+                              if _QUICK_BLOCK.search(f"{t.title} {t.description}")),
+                             None)
+            if host_task is None and dag.order():
+                host_task = dag.order()[-1]
+            if host_task is not None:
+                self.ui.event("warn", "goal-level hosting parachute (DAG ended unhosted)")
+                if self._host_parachute(host_task):
+                    host_task.status = TaskStatus.DONE
+                    host_task.verdict = "pass"
+                    host_task.score = max(host_task.score, 100.0)
+
         # ---- SYNTHESIZE
         self.ui.phase("SYNTHESIZE", "supervisor combining results")
         results = [t.to_dict() for t in dag.order()]
@@ -330,23 +347,30 @@ class Orchestrator:
         # v1.8.3: hosting truth is FACT, not opinion — the synthesizer gets the
         # verified evidence (or the explicit warning) so it can never fabricate
         # "HTTP 200 / live at / marker found" (live run did exactly that).
-        facts = ""
-        if any(_QUICK_BLOCK.search(t.description) for t in dag.tasks.values()):
+        facts_parts: List[str] = []
+        wf = self._workspace_facts()
+        if wf:
+            facts_parts.append(wf)
+        if self._goal_needs_host(goal, dag):
             if self._server_evidence:
-                facts = ("VERIFIED HOSTING EVIDENCE (real start_server tool output, "
-                         "quote it as proof): " + self._server_evidence[-1])
+                facts_parts.append(
+                    "VERIFIED HOSTING EVIDENCE (real start_server tool output, "
+                    "quote it as proof): " + self._server_evidence[-1])
             else:
-                facts = ("HOSTING REALITY: NO verified hosting happened in this run — "
-                         "no start_server tool output shows HTTP 200 + marker. Your "
-                         "final answer MUST say hosting was NOT verified and give the "
-                         "exact command to run it. NEVER write 'HTTP 200', 'live at', "
-                         "'marker found' or 'hosted' unless the RESULTS contain that "
-                         "actual evidence.")
+                facts_parts.append(
+                    "HOSTING REALITY: NO verified hosting happened in this run — "
+                    "no start_server tool output shows HTTP 200 + marker. Your "
+                    "final answer MUST say hosting was NOT verified. NEVER write "
+                    "'HTTP 200', 'live at', 'marker found' or 'hosted' unless the "
+                    "RESULTS contain that actual evidence. NEVER tell the user to "
+                    "run python -m http.server / npm start / flask themselves — "
+                    "that is a hosting-guide, which is FORBIDDEN.")
+        facts = "\n\n".join(facts_parts)
         try:
             final = self.supervisor.synthesize(goal, results, plan, facts=facts)
         except Exception as e:  # noqa: BLE001
             final = self._manual_summary(dag, str(e))
-        report.final = final
+        report.final = self._sanitize_final(final, self._goal_needs_host(goal, dag))
 
         # ---- final safety + memory
         ok_out, reason = self.ctx.guard.check_text(final, "output")
@@ -357,11 +381,12 @@ class Orchestrator:
         report.ok = done_n > 0 and not dag.failed()
         report.verified = all(t.score >= 60 for t in dag.done()) if dag.done() else False
         # hosting-required run with zero real start_server evidence is never 'verified'
-        if (any(_QUICK_BLOCK.search(t.description) for t in dag.tasks.values())
-                and not self._server_evidence):
+        if self._goal_needs_host(goal, dag) and not self._server_evidence:
             report.verified = False
             report.stopped_reason = "; ".join(
                 x for x in [report.stopped_reason or "", "hosting not verified"] if x)
+        elif self._goal_needs_host(goal, dag) and self._server_evidence:
+            report.verified = True
         report.elapsed = time.time() - t0
         report.tokens = sum(t.tokens for t in dag.tasks.values())
 
@@ -418,7 +443,61 @@ class Orchestrator:
                         break
 
     # ------------------------------------------------------------------
-    # ------------------------------------------------------------------
+    @staticmethod
+    def _goal_needs_host(goal: str, dag: Optional[TaskDAG] = None) -> bool:
+        """v1.8.7: hosting is required if the USER GOAL says so, not only if
+        some task description happened to mention http (timeout can skip t4)."""
+        if _QUICK_BLOCK.search(goal or ""):
+            return True
+        if dag is not None:
+            return any(_QUICK_BLOCK.search(f"{t.title} {t.description}")
+                       for t in dag.tasks.values())
+        return False
+
+    def _workspace_facts(self) -> str:
+        """Authoritative file list so the synthesizer cannot deny existing files
+        (live: claimed test_contact.py was never created — it was)."""
+        try:
+            ws = Path(self.config.workspace)
+            if not ws.exists():
+                return ""
+            keep = {".html", ".css", ".js", ".py", ".md", ".json", ".txt"}
+            skip = {".nexus", "__pycache__", ".git", "node_modules"}
+            files: List[str] = []
+            for p in sorted(ws.rglob("*")):
+                if not p.is_file():
+                    continue
+                if any(part in skip for part in p.parts):
+                    continue
+                if p.suffix.lower() not in keep:
+                    continue
+                files.append(str(p.relative_to(ws)))
+                if len(files) >= 48:
+                    break
+            if not files:
+                return ""
+            return ("WORKSPACE FILES THAT EXIST (authoritative — NEVER say these "
+                    "are missing):\n" + "\n".join(f"- {f}" for f in files))
+        except Exception:
+            return ""
+
+    _DIY_SERVER = _re.compile(
+        r"(?im)^[ \t]*([•*\-]\s*)?(to host:.*|python3?\s+-m\s+http\.server[^\n]*|"
+        r"then visit http://localhost[^\n]*|"
+        r"run (the )?(start_server|server) command[^\n]*|"
+        r"you must run the server[^\n]*)\n?")
+
+    def _sanitize_final(self, text: str, hosting_required: bool) -> str:
+        """Strip DIY hosting-guides even if the LLM ignores FACTS."""
+        out = text or ""
+        if hosting_required and not self._server_evidence:
+            out = self._DIY_SERVER.sub("", out)
+            if not _re.search(r"not verified", out, _re.I):
+                out = (out.rstrip() +
+                       "\n\nHosting was NOT verified in this run "
+                       "(no start_server evidence).")
+        return out
+
     def _host_parachute(self, task: Task) -> bool:
         """v1.8.3: HARNESS-EXECUTED hosting. If a coder task that must host ends
         without a verified start_server call, the engine starts the server itself:

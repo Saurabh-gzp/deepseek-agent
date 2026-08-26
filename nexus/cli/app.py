@@ -732,7 +732,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = ap.parse_args(argv)
 
     if args.version:
-        print("nexus-agent 1.4.2")
+        from ..core.config import get_config as _gc
+        print(f"nexus-agent {_gc().get('app.version', '1.8.7')}")
         return 0
 
     app = NexusApp(args.config, args.theme, not args.quiet, args.mode, args.workspace)

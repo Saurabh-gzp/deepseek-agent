@@ -103,8 +103,16 @@ class ShellTools:
             return ToolResult(False, error=(
                 f"run_shell internal error ({type(e).__name__}): {e}"))
 
+    _BARE_PYTHON = re.compile(r"(^|[;&|`\s])python(?=\s|$)")
+
+    def _prefer_python3(self, command: str) -> str:
+        """v1.8.7: bare `python` is often missing; rewrite to python3.
+        Leaves python3 / python3.x untouched."""
+        return self._BARE_PYTHON.sub(r"\1python3", command or "")
+
     def _run_shell(self, command: str, cwd: str = ".", timeout: int = 0) -> ToolResult:
         # ---- deletion choke-point: rm/shred/find -delete etc. hard-blocked
+        command = self._prefer_python3(command)
         if SHELL_DELETE.search(command):
             return ToolResult(False, error="BLOCKED: this command deletes files. " + DELETE_GUIDE)
         # ---- foreground-server choke-point: servers must use start_server

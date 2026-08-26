@@ -383,7 +383,11 @@ class SupervisorAgent(BaseAgent):
                     "HONESTY RULE: if FACTS says hosting was NOT verified, your "
                     "answer must say so explicitly — never claim HTTP 200, 'live at', "
                     "'marker found' or 'hosted' as if proven. If FACTS gives verified "
-                    "hosting evidence, quote it as the proof."))
+                    "hosting evidence, quote it as the proof. NEVER tell the user to "
+                    "run python -m http.server / npm start / flask themselves "
+                    "(that is a hosting guide = forbidden). If FACTS lists "
+                    "WORKSPACE FILES, those files EXIST — never say they were not "
+                    "created."))
 
 
 # ======================================================================
@@ -466,6 +470,8 @@ class CoderAgent(BaseAgent):
         "- If you loaded a skill, its rules are MANDATORY — follow its checklist literally.\n"
         "- Write complete, runnable code — no TODO stubs or '...' placeholders.\n"
         "- Test what you write; a task is done only when execution succeeds.\n"
+        "- Always invoke the interpreter as `python3` (never bare `python`). "
+        "Run project tests with cwd=projects/<slug> so imports resolve.\n"
         "- Keep changes minimal and focused; match the project's existing style.\n"
         "- Prefer stdlib; install deps only when necessary (Termux may lack build tools).\n"
         "- On Termux you can use termux-api commands (termux-battery-status, "
