@@ -125,6 +125,7 @@ class UI:
     def __init__(self, theme: str = "cocoa", verbose: bool = True):
         self.console = Console(theme=THEMES.get(theme, THEMES["cocoa"]), soft_wrap=False)
         self.verbose = verbose
+        self._cpr_ok = None
         self.width = shutil.get_terminal_size((80, 24)).columns
         self.narrow = self.width < 70
         self._live: Optional[Live] = None
@@ -134,8 +135,46 @@ class UI:
         self.history_path = None
         self._pt_session = None
 
+    def _cursor_report_supported(self) -> bool:
+        """Probe: does this terminal answer cursor-position reports (CPR)?
+
+        prompt_toolkit's repaint math relies on CPR. On terminals that DON'T
+        answer (dumb pipes, some emulators), a SIGWINCH resize makes PT reprint
+        the prompt with real newlines — the 'nexus ❯' multiplication bug on
+        Termux screen resize. Where CPR is missing we fall back to the simple
+        rich input (stable, no autocomplete).
+        """
+        if self._cpr_ok is not None:
+            return self._cpr_ok
+        import select as _select
+        try:
+            if not sys.stdin.isatty():
+                self._cpr_ok = False
+                return False
+            import termios as _termios
+            old = _termios.tcgetattr(sys.stdin)
+            import tty as _tty
+            _tty.setcbreak(sys.stdin.fileno())
+            try:
+                sys.stdout.write("\x1b[6n")
+                sys.stdout.flush()
+                r, _, _ = _select.select([sys.stdin], [], [], 0.4)
+                if r:
+                    data = sys.stdin.read(32)
+                    self._cpr_ok = "\x1b[" in data and "R" in data
+                else:
+                    self._cpr_ok = False
+            finally:
+                _termios.tcsetattr(sys.stdin, _termios.TCSADRAIN, old)
+        except Exception:
+            self._cpr_ok = False
+        return self._cpr_ok
+
     def _pt(self):
-        """prompt_toolkit session — '/ ' pe command menu, arrow-key history."""
+        """prompt_toolkit session — '/ ' command menu, arrow-key history.
+        Only used when the terminal supports cursor-position reports."""
+        if not self._cursor_report_supported():
+            return None
         if self._pt_session is None:
             from .completer import make_prompt_session
             self._pt_session = make_prompt_session(self.completer, self.history_path)
@@ -308,10 +347,12 @@ class UI:
         if pt is not None:
             try:
                 from prompt_toolkit.formatted_text import HTML as PTHTML
+                # NOTE: keep this render MINIMAL — no bottom_toolbar, single-line
+                # message. Extra render layers multiply on terminal resize (SIGWINCH)
+                # and were causing duplicated "nexus ❯" lines on Termux.
                 text = pt.prompt(PTHTML(
                     f"<ansicyan><b>{plain or '❯'}</b></ansicyan> "),
-                    is_password=secret,
-                    bottom_toolbar="CTRL+C = Stop · /help for commands")
+                    is_password=secret)
                 return text if (text or not default) else default
             except Exception:
                 pass                                        # fallback niche

@@ -330,7 +330,12 @@ class CoderAgent(BaseAgent):
         "a foreground server will block and time out.\n"
         "- REPORT ONLY REAL TOOL OUTPUT. NEVER write 'example output', 'sample', or "
         "invented values in place of actual command results — if a command failed or "
-        "was unavailable, SAY SO. Fabricated output is the worst failure mode."
+        "was unavailable, SAY SO. Fabricated output is the worst failure mode.\n"
+        "- DEVICE REPORTS (Android/Termux): in `df -h` output, rows like "
+        "/dev/block/dm-* , /system, /vendor, /product are READ-ONLY SYSTEM "
+        "partitions — they are ALWAYS ~100% full and are NOT the user's storage. "
+        "User storage = the /data and /storage/emulated rows ONLY. Never sum "
+        "system partitions into 'your storage is full' — that is a false alarm."
     )
 
     def __init__(self, ctx, quick: bool = False):
@@ -357,7 +362,12 @@ class CriticAgent(BaseAgent):
         "FABRICATION CHECK: if the result contains 'example output', 'sample values', "
         "'replace with actual', or ellipsis-instead-of-real-output for a command that "
         "WAS run (or should have been), the verdict is FAIL — invented numbers are "
-        "worse than an honest failure.\n\n"
+        "worse than an honest failure.\n"
+        "DEVICE-REPORT CHECK: for storage/device summaries, verify the conclusion "
+        "matches the CORRECT rows — /data and /storage/emulated are user storage; "
+        "/dev/block/dm-*, /system, /vendor rows are read-only system partitions "
+        "(always ~100% full, normal). If the agent calls system partitions "
+        "'your storage is full', the verdict is FAIL.\n\n"
         "Procedure (max 4 tool calls, be efficient):\n"
         "1. Check the artifacts named in the result actually exist and contain what was claimed.\n"
         "1b. If the task names exact files/paths (e.g. 'todo.py'), they must exist at that exact "

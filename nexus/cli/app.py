@@ -235,7 +235,9 @@ class NexusApp:
         self._install_ctrl_c()
         while self.running:
             try:
-                line = self.ui.ask("\n[user]nexus ❯[/]").strip()
+                # NOTE: no leading \n here — blank-enter and terminal-resize
+                # repaints must not stack empty lines above the prompt.
+                line = self.ui.ask("[user]nexus ❯[/]").strip()
             except (KeyboardInterrupt, EOFError):
                 self.ui.print("\n[muted]bye 👋[/]")
                 break

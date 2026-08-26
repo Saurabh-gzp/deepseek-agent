@@ -139,6 +139,12 @@ say so and fall back to `/sys` and `df`.
 ## Storage — what actually works on Android
 - **Sizes:** `df -h` — look at `/storage/emulated` and `/data` rows.
   `df | grep storage` filters it fast. THIS is the source for "how much storage".
+- **Reading df -h correctly (CRITICAL):** rows like `/dev/block/dm-*`, `/system`,
+  `/system_ext`, `/product`, `/vendor` are READ-ONLY ANDROID SYSTEM partitions —
+  they are ALWAYS ~100% full and that is NORMAL. They are NOT the user's storage.
+  Report user storage from `/data` (apps+app data) and `/storage/emulated`
+  (shared storage) rows only. NEVER sum the dm-* rows and claim
+  "your phone storage is full" — that is a false alarm and a plain wrong answer.
 - **Folder sizes:** `du -sh ~/storage/shared/* 2>/dev/null` — needs storage
   permission (below); scanning all of /sdcard is SLOW — target subfolders,
   add a timeout, and expect `Permission denied` on some dirs (Android 11+

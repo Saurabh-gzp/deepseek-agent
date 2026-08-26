@@ -1199,3 +1199,16 @@ class TestWorkspaceCleanFixes:
         import inspect
         src = inspect.getsource(UI)
         assert "Ctrl+C = stop" in src          # live-indicator hint present
+
+    def test_prompt_no_duplicate_on_dumb_terminal(self):
+        """No CPR support → _pt() returns None → stable rich input (no PT repaint)."""
+        from nexus.cli.ui import UI
+        ui = UI()
+        ui._cpr_ok = False
+        assert ui._pt() is None
+
+    def test_device_report_rules_in_prompts(self):
+        """coder + critic know system partitions ≠ user storage (live 64GB bug)."""
+        from nexus.agents.specialists import CoderAgent, CriticAgent
+        assert "/dev/block/dm-*" in CoderAgent.system_prompt
+        assert "DEVICE-REPORT CHECK" in CriticAgent.system_prompt
