@@ -1,4 +1,4 @@
-# ── Secrets — KABHI commit na karo ──────────────────────────
+# ── Secrets — NEVER commit these ─────────────────────────────
 .env
 keys/
 *.key
