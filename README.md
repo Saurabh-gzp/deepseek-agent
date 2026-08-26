@@ -77,7 +77,11 @@ Keys are saved with chmod 600 **only on your device**, inside `keys/`.
 
 More keys = more uptime — add them anytime at runtime with `/keys add sk-...`.
 
-### Optional: fancy input (slash autocomplete)
+### Slash autocomplete (`/` menu)
+
+Typing `/` at the prompt lists every command with hints. Disable with `NEXUS_FANCY_INPUT=0` or `ui.fancy_input: false` if a terminal reprints the prompt on resize.
+
+### Optional notes
 
 The default input is rock-stable everywhere. If you want `/`-command
 autocomplete and arrow-key history, enable the fancy input:

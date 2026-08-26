@@ -14,6 +14,7 @@ from ..tools.shell import ShellTools
 from ..tools.web import WebTools
 from ..tools.office import OfficeTools
 from ..tools.dbms import DbmsTools
+from ..tools.gitops import GitTools
 
 
 class AgentContext:
@@ -50,6 +51,8 @@ class AgentContext:
         self.office.register(self.tools)
         self.dbms = DbmsTools(config.workspace)
         self.dbms.register(self.tools)
+        self.gitops = GitTools(config.workspace)
+        self.gitops.register(self.tools)
         self._register_meta_tools()
 
         # --- safety --------------------------------------------------------

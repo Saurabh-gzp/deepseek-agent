@@ -1372,16 +1372,22 @@ class TestWorkspaceCleanFixes:
         assert "Ctrl+C = stop" in src          # live-indicator hint present
 
     def test_prompt_no_duplicate_on_dumb_terminal(self):
-        """Fancy PT input is opt-in only → default _pt() returns None (stable input)."""
+        """Slash menu is ON by default; NEXUS_FANCY_INPUT=0 forces stable rich input."""
         from nexus.cli.ui import UI
-        ui = UI()
-        assert ui._pt() is None                    # default: stable rich input
         import os
-        os.environ["NEXUS_FANCY_INPUT"] = "1"
+        ui = UI()
+        os.environ["NEXUS_FANCY_INPUT"] = "0"
+        ui.config_opt_fancy = False
         try:
-            assert ui._pt() is not None            # opt-in enables PT
+            assert ui._pt() is None
         finally:
-            del os.environ["NEXUS_FANCY_INPUT"]
+            os.environ.pop("NEXUS_FANCY_INPUT", None)
+        os.environ["NEXUS_FANCY_INPUT"] = "1"
+        ui.config_opt_fancy = True
+        try:
+            assert ui._pt() is not None
+        finally:
+            os.environ.pop("NEXUS_FANCY_INPUT", None)
 
     def test_device_report_rules_in_prompts(self):
         """coder + critic know system partitions ≠ user storage (live 64GB bug)."""
@@ -1534,7 +1540,7 @@ class TestV185:
         from nexus.orchestrator import engine as engmod
         src = inspect.getsource(engmod.Orchestrator._host_parachute)
         assert "MISSING dir" in src and "m = None" in src
-        assert "cands = sorted(base.rglob" in src  # heuristic still there
+        assert "cands = sorted(scoped.rglob" in src  # heuristic still there
 
     def test_fallback_plan_is_deterministic_split(self):
         """one-worker mega-task is dead: fallback now mirrors the normal DAG."""
@@ -1719,3 +1725,46 @@ class FakeResp:
 
     def read(self):
         return self._body
+
+
+class TestV19Autonomous:
+    def test_identity_help_not_action(self):
+        from nexus.orchestrator.engine import IDENTITY_Q, ACTION_VERB
+        assert IDENTITY_Q.search("help")
+        assert IDENTITY_Q.search("what is your name")
+        assert IDENTITY_Q.search("how can you help")
+        assert not (IDENTITY_Q.search("help me write a file") and not ACTION_VERB.search("help me write a file"))
+        assert ACTION_VERB.search("help me write a file")
+
+    def test_session_and_check_regex(self):
+        from nexus.orchestrator.engine import SESSION_Q, CHECK_FOLLOW, DROP_THIS
+        assert SESSION_Q.search("kitne sessions hai")
+        assert CHECK_FOLLOW.match("check to kr")
+        assert DROP_THIS.search("chor delete kr ise")
+
+    def test_start_server_path_is_directory_not_url(self, tmp_path):
+        (tmp_path / "projects" / "demo").mkdir(parents=True)
+        (tmp_path / "projects" / "demo" / "index.html").write_text(
+            "<html><title>Demo Site</title><body>Demo Site</body></html>")
+        sh = ShellTools(tmp_path, timeout=20)
+        r = sh.start_server(command="", port=0, path="projects/demo", marker="Demo Site")
+        assert r.ok, r.error
+        assert "8000projects" not in (r.output or "") + (r.error or "")
+        assert "HTTP 200" in (r.output or "")
+        import os, signal
+        pid = (r.data or {}).get("pid")
+        if pid:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+
+    def test_git_status_tool(self, tmp_path):
+        from nexus.tools.gitops import GitTools
+        from nexus.tools.base import ToolRegistry
+        g = GitTools(tmp_path)
+        reg = ToolRegistry()
+        g.register(reg)
+        assert "git_status" in reg.names()
+        r = g.git_status()
+        assert hasattr(r, "ok")

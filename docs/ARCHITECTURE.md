@@ -85,7 +85,7 @@ pushes that model's next slot out globally via `penalise()`.
 handle(goal)
  ├─ moderate input                    → block or continue
  ├─ build memory context              → recent window + semantic recall
- ├─ ROUTER (3B)                       → trivial? answer directly and return
+ ├─ ROUTER (small-2603)                       → trivial? answer directly and return
  ├─ SUPERVISOR.plan()                 → JSON task DAG, sanitised, cycles broken
  └─ loop until settled or replans exhausted
      ├─ dag.ready(max_parallel)       → deps satisfied, parallel_safe respected
@@ -112,7 +112,7 @@ handle(goal)
 | `max_steps_per_agent` | 12 | `BaseAgent.run` |
 | `max_retries` | 2 | `_run_task` |
 | `task_timeout_seconds` | 180 | per agent run + per-task cumulative budget |
-| `overall_timeout_seconds` | 900 | `_execute_dag` |
+| `overall_timeout_seconds` | 1500 | `_execute_dag` |
 | `large_model_calls_per_task` | 1 | `LLMClient._allow_large` |
 
 ---

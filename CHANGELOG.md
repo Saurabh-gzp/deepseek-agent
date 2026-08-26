@@ -306,3 +306,8 @@ critic 100.0 pass, workspace EMPTY, no manual `rm -rf`.
 Build-goal regression: `projects/<slug>/` isolation intact. Tests: 128 pass.
 Setup: one-command `setup.sh` (deps + old-key purge + self-test + launch
 instructions); `--update` mode keeps keys. Entire codebase now English-only.
+
+## 1.9.0
+- Quota-based roles (medium-2508 / small-2603, not 8B primary)
+- start_server path vs URL; Termux chat fast-paths; `/` menu default on
+- Duplicate failed tool-call diagnosis; git_status/diff/log tools

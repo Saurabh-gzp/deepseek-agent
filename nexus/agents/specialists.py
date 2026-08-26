@@ -22,6 +22,7 @@ READ_ONLY = ["read_file", "list_dir", "search_files", "find_files", "load_skill"
 WEB = ["web_search", "web_fetch", "http_request"]
 WRITE = ["write_file", "edit_file", "move_path"]
 EXEC = ["run_shell", "run_python", "install_package", "start_server"]
+GIT = ["git_status", "git_diff", "git_log"]
 OFFICE = ["make_pptx", "make_pdf", "make_docx"]
 DBMS = ["sqlite_exec", "sqlite_schema"]
 MEM = ["remember", "index_knowledge"]
@@ -66,7 +67,7 @@ class RouterAgent(BaseAgent):
         "LIVE INFO (weather, news, scores, prices — anything 'current/latest/today') — "
         "you have NO live data: set needs_orchestration=true with suggested_agents "
         "[\"researcher\"]. NEVER deflect users to other websites/apps.\n"
-        "MODEL ROUTING (you are the 8B capability decider):\n"
+        "MODEL ROUTING (you classify capability):\n"
         "  * device/system questions (storage, battery, wifi, memory, phone) => task_type=device, "
         "model_hint=worker, suggested_agents=[\"worker\"] — the system has a device_info tool "
         "that knows the correct commands.\n"
@@ -186,7 +187,7 @@ class SupervisorAgent(BaseAgent):
         "devstral for multi-file/repository tasks.\n"
         "- researcher = mistral-small-2603: web research, live info (weather, news, prices), "
         "documents, citations.\n"
-        "- worker = ministral-8b-2512 (or ministral-14b-2512 when extra reasoning helps): "
+        "- worker = mistral-small-2603 (ministral-14b-2512 fallback): "
         "data shaping, summaries, formatting, comparisons, DEVICE/SYSTEM queries, simple file ops. NEVER code, never design/UI/mockups, never website work — those always go to coder.\n"
         "- critic = mistral-medium-latest: verification ONLY, and only if the goal explicitly "
         "demands verification.\n"
@@ -459,7 +460,7 @@ class ResearcherAgent(BaseAgent):
 class CoderAgent(BaseAgent):
     role_key = "coder_repo"
     agent_name = "coder"
-    allowed_tools = READ_ONLY + WRITE + EXEC + ["delete_path"] + OFFICE + DBMS
+    allowed_tools = READ_ONLY + WRITE + EXEC + GIT + ["delete_path"] + OFFICE + DBMS
     max_steps = 14
     system_prompt = (
         "You are the CODING agent. You inspect, write and fix real code in the workspace.\n"

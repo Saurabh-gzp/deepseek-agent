@@ -59,10 +59,10 @@ FOLLOWUP_REF = _re.compile(
     r"again|repeat|same|to)\b", _re.I)
 # Identity questions — instant deterministic answer (the LLM sometimes leaked ROUTER)
 IDENTITY_Q = _re.compile(
-    r"^(help|kaise help( karo?)?|how can you help( me)?|"
-    r"what can you do|who are you|about yourself|"
-    r"introduce( yourself)?|kya (kar|kr) sakte|kya kr skte|"
-    r"help karo?)[\s?!.]*$", _re.I)
+    r"(your name|who are you|about yourself|introduce|"
+    r"what can you do|how can you help|kaise help|"
+    r"kya kar sakte|kya kr skte|"
+    r"^help\s*[?!.]*$)", _re.I)
 SESSION_Q = _re.compile(
     r"(kitne\s+session|how many session|list session|"
     r"^sessions?\s*[?!.]*$|session (count|list))", _re.I)
@@ -218,7 +218,8 @@ class Orchestrator:
         #      always in the user's own script, zero LLM calls
         import random as _rnd
         if not force_orchestration:
-            if IDENTITY_Q.search(goal) and len(goal.split()) <= 12:
+            if (IDENTITY_Q.search(goal) and len(goal.split()) <= 12
+                    and not ACTION_VERB.search(goal)):
                 self.ui.phase("CHAT", "hello! 👋")
                 report = RunReport(goal=goal, task_id=task_id,
                                    final=NEXUS_INTRO, ok=True, verified=True,

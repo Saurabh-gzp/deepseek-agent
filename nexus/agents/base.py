@@ -205,6 +205,17 @@ class BaseAgent:
                                  "tool_call_id": call.get("id", f"call_{i}"),
                                  "content": out.as_text(7000)})
                 consec_fail = consec_fail + 1 if not out.ok else 0
+                if not out.ok:
+                    sig = (name, json.dumps(args, sort_keys=True, default=str)[:400])
+                    last = getattr(self, "_last_fail_sig", None)
+                    self._last_fail_sig = sig
+                    if last == sig:
+                        messages.append({"role": "user", "content":
+                            "DIAGNOSE: you just repeated the EXACT same failed tool call. "
+                            "Do not run it again. Read the ERROR, change the approach "
+                            "(different tool/args/path) or FINALIZE honestly."})
+                else:
+                    self._last_fail_sig = None
 
             # BRAKE (sutra-style harness rule): 3 consecutive failed tool calls =
             # the agent is guessing commands. Force it onto the safe path NOW.
