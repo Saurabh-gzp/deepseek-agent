@@ -125,7 +125,7 @@ class UI:
     def __init__(self, theme: str = "cocoa", verbose: bool = True):
         self.console = Console(theme=THEMES.get(theme, THEMES["cocoa"]), soft_wrap=False)
         self.verbose = verbose
-        self.config_opt_fancy = False        # set by the app from ui.fancy_input
+        self.config_opt_fancy = True         # slash menu on unless config/env disables
         self.width = shutil.get_terminal_size((80, 24)).columns
         self.narrow = self.width < 70
         self._live: Optional[Live] = None
@@ -173,14 +173,13 @@ class UI:
     def _pt(self):
         """prompt_toolkit session — '/ ' command menu, arrow-key history.
 
-        OPT-IN only (env NEXUS_FANCY_INPUT=1 or config ui.fancy_input: true).
-        Reason: PT's repaint relies on cursor-position reports; on terminals
-        where that is flaky, a screen resize reprints the prompt with real
-        newlines (the 'nexus ❯' multiplication bug). The default rich input
-        path is stable everywhere. (A runtime CPR probe was tried and
-        REJECTED — it left Termux stdin in a broken echo state: launch hang.)"""
+        ON by default so typing `/` shows the command menu.
+        Opt OUT: NEXUS_FANCY_INPUT=0 or ui.fancy_input: false."""
         import os as _os
-        if not (_os.getenv("NEXUS_FANCY_INPUT") == "1" or self.config_opt_fancy):
+        env = _os.getenv("NEXUS_FANCY_INPUT")
+        if env == "0":
+            return None
+        if env != "1" and self.config_opt_fancy is False:
             return None
         if self._pt_session is None:
             from .completer import make_prompt_session

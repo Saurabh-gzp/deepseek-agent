@@ -273,11 +273,15 @@ class NexusApp:
             parts = line[1:].split(" ", 1)
             cmd = parts[0].lower()
             arg = parts[1].strip() if len(parts) > 1 else ""
+            if not cmd:
+                self.cmd_help("")
+                return
             fn = getattr(self, f"cmd_{cmd.replace('-', '_')}", None)
             if fn:
                 fn(arg)
             else:
                 self.ui.event("warn", f"unknown command /{cmd} — try /help")
+                self.cmd_help("")
             return
         self.run_goal(line)
 

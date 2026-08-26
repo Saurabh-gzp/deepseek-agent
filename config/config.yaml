@@ -251,7 +251,5 @@ failover:
                                   # (ring waits ≤45s when all keys cool, then retries)
   retry_backoff_base: 1.5
 
-# ui.fancy_input: true  → enable prompt_toolkit input: slash autocomplete,
-#                           arrow-key history (env: NEXUS_FANCY_INPUT=1).
-#                           Off by default: on some terminals a resize
-#                           reprints the prompt; the default input is stable.
+ui:
+  fancy_input: true              # `/` slash menu + history (NEXUS_FANCY_INPUT=0 to disable)
