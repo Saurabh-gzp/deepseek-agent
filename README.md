@@ -288,6 +288,22 @@ large_model_calls_per_task: 1
 
 ---
 
+## What's new in v1.6.0 — sutra-style discipline (no wrong commands)
+
+- `device_info` is now pure-Python + `which()`-guarded: it reports REAL values
+  or explicit `unavailable + fix-hint` — the agent never guesses commands
+  ("network status check": 409s/186k tok/17 failures → 34s/7.5k tok/0 failures).
+- The model sees an **AVAILABLE COMMANDS** fact block, so `termux-*`, `adb`,
+  `dumpsys` guesses are impossible; 3 consecutive tool failures force a HALT
+  and honest finalization (no more 200k-token burn loops).
+- **Capability is enforced in the harness**: design/UI/code/website tasks are
+  always coder (devstral/codestral) — the 8B worker can never be assigned
+  coding work, whatever the plan says.
+- `start_server` — hosting is started + verified (HTTP 200 + content marker) in
+  one call and stays up; "hosted" claims are now proven.
+- web_search falls back across 4 engines, so blocked DuckDuckGo no longer
+  kills research.
+
 ## What's new in v1.5.0 — capability-aware autonomy
 
 - **8B capability decider** — router now classifies intent AND which model class

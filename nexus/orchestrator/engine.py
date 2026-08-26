@@ -283,6 +283,7 @@ class Orchestrator:
         report.plan = plan
         dag = TaskDAG.from_plan(plan)
         self._apply_project_scope(goal, plan, dag)
+        self._reinforce_assignment(dag)     # v1.6: harness-level capability fix
         self.ui.show_plan(plan, dag)
 
         # ---- EXECUTE loop with replanning
@@ -502,6 +503,26 @@ class Orchestrator:
                               r"empty)\b", _re.I)
     CREATE_Y = _re.compile(r"\b(create|build|make|generate|new|add|"
                            r"write|setup|install)\b", _re.I)
+
+    # v1.6: capability enforcement — the supervisor plans, the harness guarantees.
+    # If the 8B worker is assigned design/code/UI/website work (its model is not
+    # capable of it — this was the live complaint), it is moved to coder models.
+    CODEY = _re.compile(
+        r"\b(design|mockup|wireframe|ui|ux|frontend|website|web ?page|html|css|"
+        r"javascript|react|vue|script that|program that|app that|api|bot|debug|"
+        r"fix (the )?(bug|error)|component|landing page|portfolio)\b", _re.I)
+
+    def _reinforce_assignment(self, dag: TaskDAG) -> None:
+        for t in dag.order():
+            if t.agent != "worker":
+                continue
+            text = f"{t.title} {t.description} {t.acceptance}"
+            if self.CODEY.search(text):
+                t.agent = "coder"
+                t.model = ""
+                self.ui.event("assign",
+                              f"{t.id} reassigned worker → coder "
+                              f"(design/code work needs coder models)")
 
     def _apply_project_scope(self, goal: str, plan: Dict[str, Any], dag) -> None:
         """Every build-goal gets its own project folder so the workspace

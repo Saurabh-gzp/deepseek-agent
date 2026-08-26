@@ -1,5 +1,55 @@
 # Changelog
 
+## [1.6.0] — sutra-style harness discipline: no more wrong commands
+
+Live audit of "network status check" (409.6s / 186,094 tokens / 17 failed
+commands / 3 critic retries) and a portfolio build revealed the root cause:
+the agents were GUESSING commands (`termux-am`, `termux-telephony-*`, `adb
+shell`, `dumpsys`, `svc wifi`) and the 8B worker was assigned design/code work.
+All fixed with harness-level rules (model proposes, harness disposes):
+
+1. **`device_info` rewritten sutra-style** — pure-Python probes first
+   (`socket` for network, `shutil.disk_usage`, `/proc/meminfo`, sysfs battery),
+   `shutil.which()` guard before EVERY external command, and anything missing is
+   reported as `unavailable` **with a fix hint** — never guessed, never retried.
+   Latency: 27–31s → **0.1s**.
+2. **`availability()` env facts** — the system prompt now tells the agent
+   exactly what exists on the device (`termux-battery-status=no`, `getprop=yes`,
+   ...). Blind `termux-*/adb/dumpsys` guesses die before they happen.
+3. **Consecutive-failure BRAKE in the agent loop** — 3 failed tool calls in a
+   row force a HALT message: device question → re-run device_info only; unknown
+   command → ONE web_search; else finalize honestly. Plus a wrap-up nudge before
+   the step budget ends. (This is what turned 17 failed runs into 0.)
+4. **Capability enforcement in the engine** — deterministic harness rule: any
+   worker task matching design/code/UI/website/API/bug-fix keywords is
+   reassigned to coder. Supervisor prompt hardened too: design docs/mockups/
+   wireframes → coder, never worker; worker scope = data/device/summaries only.
+5. **`start_server` tool** — one-shot hosting: launches the server DETACHED,
+   waits for the port, fetches the URL, verifies content markers, reports the
+   verified URL. The "hosted" claim is now proven (live: 200 + `<title>` match);
+   the server stays up across calls. Tolerates fuzzy LLM kwargs.
+6. **web_search multi-engine fallback** — DuckDuckGo HTML → DDG lite → Bing →
+   Mojeek → instant-answer API, so one blocked engine no longer zeroes
+   research ("No results for 'Claude AI frontend design...'" fixed — that query
+   now returns Anthropic's own page).
+7. **Critic**: a value reported `unavailable` WITH a reason is a complete,
+   honest answer — no more retry-loops demanding signal strength that the
+   device cannot provide. Tool-failure insurance (≤79) still applies.
+8. Coder/worker prompts: hosting = start_server OR one-shot nohup+curl with
+   marker verification; never claim hosting without HTTP 200 + content.
+
+**Verified live (self-driven tasks, no test files):**
+- `network status check` → **34s · 7,534 tokens · 0 failed commands · pass 100**
+  (was 409.6s · 186k tokens · 17 failures · 3 retry loops)
+- `storage info` → 19.5s · 8,101 tokens (was 251.5s · 144,732 tokens)
+- Portfolio build + host → files in `projects/portfolio2/`, server on :8091
+  verified 200 + title, still alive after the run
+- Plan audit: portfolio = researcher(small) → coder(devstral) → coder(codestral);
+  worker assigned NOTHING code/design. Storage = 1 worker task only.
+- 134/134 offline tests.
+
+# Changelog
+
 ## [1.5.0] — capability-aware autonomous agent + live-audit fixes
 
 **Model inventory (live-verified against the API, 2026-08-26):**

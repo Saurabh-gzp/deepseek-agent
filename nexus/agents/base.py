@@ -67,6 +67,14 @@ class BaseAgent:
             f"Today: {time.strftime('%Y-%m-%d %H:%M')}",
             "Platform: Termux/Linux CLI. Prefer POSIX commands, avoid interactive prompts.",
         ]
+        # Sutra-style env facts: TELL the model what actually exists so it never
+        # fires blind `termux-*/adb/dumpsys` commands (live bug: 17 failed runs).
+        try:
+            avail = self.ctx.shell.availability()
+            if avail:
+                env.append("AVAILABLE COMMANDS on this device:\n" + avail)
+        except Exception:
+            pass
         parts.append("## Environment\n" + "\n".join(f"- {e}" for e in env))
 
         if self.use_skills and self.ctx.skills:
@@ -127,6 +135,8 @@ class BaseAgent:
         tokens = 0
         model_used = ""
         specs = self.tool_specs()
+        consec_fail = 0          # v1.6: brake on repeated tool failures (token fires)
+        fail_flagged = False
 
         for i in range(budget):
             # user pressed Ctrl+C → stop this agent cleanly at the next step
@@ -194,6 +204,28 @@ class BaseAgent:
                 messages.append({"role": "tool", "name": name,
                                  "tool_call_id": call.get("id", f"call_{i}"),
                                  "content": out.as_text(7000)})
+                consec_fail = consec_fail + 1 if not out.ok else 0
+
+            # BRAKE (sutra-style harness rule): 3 consecutive failed tool calls =
+            # the agent is guessing commands. Force it onto the safe path NOW.
+            if consec_fail >= 3 and not fail_flagged:
+                fail_flagged = True
+                consec_fail = 0
+                messages.append({"role": "user", "content":
+                    "HALT: 3+ tool calls failed in a row — you are guessing commands. "
+                    "STOP firing new commands. Instead: (1) if the task is a DEVICE "
+                    "question, re-run device_info/system_info and report what they "
+                    "returned, including explicit 'unavailable' notes — nothing more; "
+                    "(2) if you do not know the exact command for something, do ONE "
+                    "web_search('how to do X in termux') and follow the first working "
+                    "example; (3) otherwise FINALIZE NOW with an honest summary of what "
+                    "worked and what is unavailable. No more blind attempts."})
+
+            # wrap-up nudge before the budget ends (never let the loop die silently)
+            if i + 1 == budget - 2 and budget > 3:
+                messages.append({"role": "user", "content":
+                                 "⏰ Tool budget almost over. Finish with what you have "
+                                 "and reply with your FINAL answer now (no more tool calls)."})
 
             # periodic self-reflection nudge
             every = int(self.config.get("autonomy.reflection_every", 4))

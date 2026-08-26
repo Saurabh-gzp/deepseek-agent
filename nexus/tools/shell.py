@@ -178,78 +178,152 @@ class ShellTools:
         info += self._device_probes()
         return ToolResult(True, output="\n".join(info))
 
-    def device_info(self, detail: str = "storage,battery,network,memory") -> ToolResult:
-        """One-shot, CORRECT device report — no command guessing.
+    def availability(self) -> str:
+        """Sutra-style env facts: tells the model EXACTLY what exists on this
+        device BEFORE it acts — kills blind `termux-*/adb/dumpsys` guesses."""
+        import shutil
+        def has(c: str) -> str:
+            return "yes" if shutil.which(c) else "no"
+        parts = [f"termux: {self.is_termux}"]
+        if self.is_termux:
+            for c in ("termux-battery-status", "termux-wifi-connectioninfo",
+                      "termux-telephony-signal-strength", "getprop", "ip",
+                      "ifconfig", "curl", "ping", "pkg", "python3"):
+                parts.append(f"{c}={has(c)}")
+            parts.append("termux-api-app=" + ("yes" if shutil.which("termux-battery-status") else "no"))
+        return ("\n".join(parts))
 
-        v1.5: replaces the old behaviour where the coder agent guessed Termux
-        paths like `/sdcard/*` (which do NOT exist in Termux) and burned
-        minutes + hundreds of tokens on failing `du -sh` runs. This tool uses
-        the canonical Termux paths (`~/storage/*`, `/data/data/...`) and only
-        reports a command's error, never retries blind variants.
-        """
-        import platform
+    def device_info(self, detail: str = "storage,battery,network,memory") -> ToolResult:
+        """One-shot REAL device report — sutra-style: pure-Python probes first,
+        `shutil.which()` guards before every external command, and anything not
+        available is reported as unavailable WITH a fix hint. Never guesses a
+        command, never retries blind variants, completes in seconds."""
+        import json as _json
+        import shutil as _shutil
+        import socket as _socket
+        import time as _time
+
         want = {p.strip().lower() for p in str(detail).split(",") if p.strip()}
         want = want or {"storage", "battery", "network", "memory"}
-        out: List[str] = [
-            f"platform : {platform.platform()}",
-            f"python   : {platform.python_version()}",
-            f"environment: {'TERMUX (Android)' if self.is_termux else 'generic Linux (not Termux)'}",
-            "note: on generic Linux there is no /data or /storage/emulated — "
-            "the real mounts below ARE the complete answer.",
-        ]
+        out = [f"environment: {'TERMUX (Android)' if self.is_termux else 'generic Linux'}",
+               f"termux-api available: {'yes' if _shutil.which('termux-battery-status') else 'no'}"]
 
-        def run(label: str, cmd: str, t: int = 20) -> None:
+        def read(path: str) -> str:
             try:
-                p = subprocess.run(cmd, shell=True, capture_output=True, text=True,
-                                   timeout=t, env={**os.environ, "LC_ALL": "C"})
-                txt = (p.stdout or "").strip()
-                err = (p.stderr or "").strip()
-                if txt:
-                    out.append(f"{label}:\n{txt}")
-                elif err:
-                    out.append(f"{label}: (error: {err[:160]})")
-            except subprocess.TimeoutExpired:
-                out.append(f"{label}: (timed out after {t}s)")
-            except Exception as e:  # noqa: BLE001
-                out.append(f"{label}: ({e})")
+                with open(path) as f:
+                    return f.read().strip()
+            except OSError:
+                return ""
 
-        # ---- STORAGE (Termux-correct paths only) -------------------------
+        # ---- STORAGE (Python-first: no du scans, no path guessing) --------
         if "storage" in want:
-            # user-visible storage: /data (app home) + /storage/emulated (sdcard)
-            run("storage_partitions",
-                "df -h /data /storage/emulated/0 2>/dev/null | sed -n '1,6p'; "
-                "df -h . | sed -n '1,5p'", 15)
-            # Termux home top-level (fast, always allowed)
-            run("termux_home_top",
-                "du -sh ~/* 2>/dev/null | sort -rh | head -12", 25)
-            # shared storage symlinks (~/storage/downloads, ~/storage/shared ...)
-            run("shared_storage_top",
-                "for d in ~/storage/*/; do [ -d \"$d\" ] && du -sh \"$d\" 2>/dev/null; done | sort -rh | head -12", 40)
-            run("sdcard_free",
-                "df -h /storage/emulated/0 /data 2>/dev/null | awk 'NR>1{print $NF\": \"used\" $(NF-3) \" of \" $(NF-4) \" free\" $(NF-2)}' | head -3", 10)
+            import shutil as _du
+            for label, path in (("workspace", str(self.root)), ("root", "/"),
+                                ("internal", "/data"), ("sdcard", "/storage/emulated/0")):
+                if not os.path.isdir(path):
+                    continue
+                try:
+                    u = _du.disk_usage(path)
+                    out.append(f"storage[{label}]: total={u.total / 1e9:.1f}GB used="
+                               f"{u.used / 1e9:.1f}GB free={u.free / 1e9:.1f}GB "
+                               f"({u.used / u.total * 100:.0f}% used)")
+                except OSError as e:
+                    out.append(f"storage[{label}]: unavailable ({e})")
 
         # ---- BATTERY ------------------------------------------------------
         if "battery" in want:
-            run("battery", "termux-battery-status 2>/dev/null || "
-                "cat /sys/class/power_supply/battery/capacity 2>/dev/null", 10)
+            tp = _shutil.which("termux-battery-status")
+            if tp:
+                try:
+                    r = subprocess.run([tp], capture_output=True, text=True, timeout=10)
+                    d = _json.loads(r.stdout or "{}")
+                    out.append(f"battery: {d.get('percentage')}% ({d.get('status')}, "
+                               f"{d.get('temperature')}C) [termux-api]")
+                except Exception as e:
+                    out.append(f"battery: unavailable ({e})")
+            else:
+                cap = read("/sys/class/power_supply/battery/capacity")
+                st = read("/sys/class/power_supply/battery/status")
+                if cap:
+                    out.append(f"battery: {cap}% ({st or 'unknown'}) [sysfs]")
+                else:
+                    out.append("battery: unavailable — install Termux:API app + `pkg install termux-api` "
+                               "(then termux-battery-status works)")
 
-        # ---- NETWORK ------------------------------------------------------
+        # ---- NETWORK (Python-first — socket, no ip/ifconfig guessing) -----
         if "network" in want:
-            run("network_ip", "ip -4 addr show 2>/dev/null | grep 'inet ' | grep -v '127.0.0.1' | "
-                              "awk '{print $2, $NF}' | head -5", 10)
-            run("network_route", "ip route 2>/dev/null | grep default | head -2", 10)
+            res = {"hostname": _socket.gethostname()}
+            try:
+                s = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+                s.settimeout(3)
+                s.connect(("8.8.8.8", 53))
+                res["local_ip"] = s.getsockname()[0]
+                s.close()
+                res["internet"] = "reachable (8.8.8.8:53)"
+            except Exception as e:
+                res["internet"] = f"unreachable ({type(e).__name__})"
+            out.append(f"network: host={res['hostname']} ip={res.get('local_ip', '?')} "
+                       f"internet={res['internet']}")
+            if self.is_termux:
+                gp = _shutil.which("getprop")
+                if gp:
+                    try:
+                        r = subprocess.run([gp, "gsm.network.type"], capture_output=True,
+                                           text=True, timeout=8)
+                        typ = r.stdout.strip()
+                        if typ:
+                            out.append(f"network.type: {typ}")
+                    except Exception:
+                        pass
+            for cmd, label in (("termux-wifi-connectioninfo", "wifi"),
+                               ("termux-telephony-signal-strength", "signal")):
+                if _shutil.which(cmd):
+                    try:
+                        r = subprocess.run([cmd], capture_output=True, text=True, timeout=10)
+                        if r.stdout.strip():
+                            out.append(f"network.{label}: {r.stdout.strip()[:200]}")
+                    except Exception:
+                        pass
+                elif label == "wifi":
+                    out.append("network.wifi: unavailable (Termux:API app missing — install "
+                               "`pkg install termux-api` + Termux:API app from F-Droid)")
+            # public IP via stdlib (no curl needed)
+            try:
+                import urllib.request
+                with urllib.request.urlopen("https://api.ipify.org?format=json",
+                                            timeout=8) as r:
+                    out.append("network.public_ip: " +
+                               _json.loads(r.read().decode()).get("ip", "?"))
+            except Exception as e:
+                out.append(f"network.public_ip: unavailable ({type(e).__name__})")
 
-        # ---- MEMORY / CPU / UPTIME ----------------------------------------
+        # ---- MEMORY / CPU ------------------------------------------------
         if "memory" in want:
-            run("memory", "free -m 2>/dev/null | sed -n '1,2p' || cat /proc/meminfo | head -3", 10)
-        run("cpu_uptime", "uptime 2>/dev/null || cat /proc/loadavg", 10)
+            mem = {}
+            for line in read("/proc/meminfo").splitlines():
+                parts = line.split(":")
+                if parts[0] in ("MemTotal", "MemAvailable", "SwapTotal"):
+                    mem[parts[0]] = round(int(parts[1].strip().split()[0]) / 1e6, 2)
+            if mem.get("MemTotal"):
+                used = round(mem["MemTotal"] - mem.get("MemAvailable", 0), 2)
+                out.append(f"memory: total={mem['MemTotal']}GB used={used}GB "
+                           f"free={mem.get('MemAvailable', 0)}GB "
+                           f"({used / mem['MemTotal'] * 100:.0f}% used)")
+            else:
+                out.append("memory: unavailable (/proc/meminfo not readable)")
+        out.append("cpu: " + (read("/proc/loadavg").split()[0] if read("/proc/loadavg") else "?"))
 
-        # ---- ANDROID identity (Termux only) -------------------------------
+        # ---- ANDROID identity --------------------------------------------
         if self.is_termux:
-            o = subprocess.run("getprop ro.product.model 2>/dev/null; getprop ro.build.version.release 2>/dev/null",
-                               shell=True, capture_output=True, text=True, timeout=8)
-            if o.stdout.strip():
-                out.append("android: " + " / ".join(x for x in o.stdout.splitlines() if x.strip()))
+            gp = _shutil.which("getprop")
+            if gp:
+                try:
+                    r = subprocess.run([gp, "ro.build.version.release"], capture_output=True,
+                                       text=True, timeout=8)
+                    if r.stdout.strip():
+                        out.append(f"android: {r.stdout.strip()}")
+                except Exception:
+                    pass
         return ToolResult(True, output="\n".join(out))
 
     def _device_probes(self) -> List[str]:
@@ -288,6 +362,96 @@ class ShellTools:
         probe("termux-api cmds", "ls $PREFIX/bin 2>/dev/null | grep '^termux-' | tr '\\n' ' ' | head -c 300")
         return out
 
+    def start_server(self, command: str, port: int = 8000, path: str = "/",
+                     marker: str = "", name: str = "", wait: int = 6,
+                     **kwargs) -> ToolResult:
+        # LLMs sometimes pass fuzzy params (timeout=, wait_seconds=, cwd=...) —
+        # tolerate and map them instead of erroring the whole tool call.
+        if kwargs:
+            if "timeout" in kwargs or "wait_seconds" in kwargs or "delay" in kwargs:
+                try:
+                    wait = int(kwargs.get("timeout") or kwargs.get("wait_seconds")
+                               or kwargs.get("delay") or wait)
+                except (TypeError, ValueError):
+                    pass
+            if "port_number" in kwargs:
+                try:
+                    port = int(kwargs["port_number"])
+                except (TypeError, ValueError):
+                    pass
+            if "url_path" in kwargs:
+                path = kwargs["url_path"]
+        """Sutra-style ONE-SHOT hosting: start a server DETACHED (survives this
+        tool call), wait for the port, fetch the URL with stdlib, and verify real
+        content markers — all in one call. The agent never claims 'hosted'
+        without a verified HTTP 200 + expected content."""
+        import json as _json
+        import socket as _socket
+        import time as _time
+        import urllib.request as _ur
+        import urllib.error as _ue
+
+        # pick a free port if 0
+        if port == 0:
+            s = _socket.socket()
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+            s.close()
+        logf = self.root / f".server_{port}.log"
+        cmd = f"cd {self.root} && {command}"
+        try:
+            with open(logf, "w", encoding="utf-8") as lf:
+                proc = subprocess.Popen(cmd, shell=True, stdout=lf, stderr=subprocess.STDOUT,
+                                       start_new_session=True,
+                                       env={**os.environ, "PYTHONUNBUFFERED": "1"})
+        except Exception as e:  # noqa: BLE001
+            return ToolResult(False, error=f"start_server failed to launch: {e}")
+
+        # wait for the port to accept connections
+        ready = False
+        t_end = _time.time() + wait
+        while _time.time() < t_end:
+            try:
+                s = _socket.socket()
+                s.settimeout(1.5)
+                s.connect(("127.0.0.1", port))
+                s.close()
+                ready = True
+                break
+            except OSError:
+                _time.sleep(0.4)
+        if not ready:
+            tail = ""
+            try:
+                tail = logf.read_text(encoding="utf-8", errors="replace")[-400:]
+            except Exception:
+                pass
+            return ToolResult(False, error=f"server did not start on port {port}. "
+                                           f"Log tail: {tail or '(empty)'}")
+
+        # fetch + verify content markers
+        url = f"http://127.0.0.1:{port}{path}"
+        body = ""
+        try:
+            with _ur.urlopen(url, timeout=8) as r:
+                body = r.read().decode("utf-8", "replace")
+        except _ue.HTTPError as e:
+            return ToolResult(False, error=f"server up on :{port} but HTTP {e.code} at {url}")
+        except Exception as e:  # noqa: BLE001
+            return ToolResult(False, error=f"server up on :{port} but fetch failed: {e}")
+
+        if marker and marker not in body:
+            return ToolResult(False, error=(
+                f"server up on :{port} but marker {marker!r} NOT found in "
+                f"{path} (content mismatch) — first 200 chars: {body[:200]!r}"))
+        out = (f"Server RUNNING (pid {proc.pid}) at http://127.0.0.1:{port}{path}"
+               + (f"\nname: {name}" if name else "")
+               + f"\nverified: HTTP 200, {len(body)} bytes fetched"
+               + (f", marker {marker!r} found" if marker else "")
+               + "\nThe server stays up — this call did NOT kill it.")
+        return ToolResult(True, output=out,
+                          data={"pid": proc.pid, "port": port, "url": url})
+
     # ------------------------------------------------------------------
     def register(self, reg: ToolRegistry) -> None:
         S = {"type": "string"}
@@ -310,6 +474,21 @@ class ShellTools:
                 self.install_package, Risk.EXECUTE, agents=["coder", "supervisor", "solo"])
         reg.add("system_info", "Show OS/python/tool availability of the host device.",
                 {"type": "object", "properties": {}}, self.system_info, Risk.READ_ONLY)
+        reg.add("start_server",
+                "Start a server DETACHED and VERIFY it in one call (for hosting tasks). "
+                "Pass the launch command (e.g. 'python3 -m http.server 8000 --directory "
+                "projects/demo'), a port, and an expected content marker; it waits for the "
+                "port, fetches the URL, checks the marker, and reports the verified URL. "
+                "The server keeps running after this call. Use this INSTEAD of plain "
+                "foreground run_shell for anything meant to stay up (http.server, flask, "
+                "node, vite build --host).",
+                {"type": "object", "properties": {
+                    "command": {"type": "string"}, "port": {"type": "integer"},
+                    "path": {"type": "string"}, "marker": {"type": "string"},
+                    "name": {"type": "string"}, "wait": {"type": "integer"}},
+                 "required": ["command"]},
+                self.start_server, Risk.EXECUTE,
+                agents=["supervisor", "coder", "worker", "solo"])
         reg.add("device_info",
                 "One-shot, CORRECT device report: storage (Termux paths), battery, network, "
                 "memory, cpu. Use for ANY device/system question (storage, battery, wifi). "

@@ -51,33 +51,103 @@ class WebTools:
         self.max_chars = max_chars
 
     # ------------------------------------------------------------------
+    # ---- engine fallbacks (a single engine being blocked must not kill research) ----
+    def _engine_ddg_html(self, query: str, n: int) -> List[dict]:
+        body = urllib.parse.urlencode({"q": query}).encode()
+        page = _get("https://html.duckduckgo.com/html/", data=body)
+        out, seen = [], set()
+        blocks = re.findall(
+            r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>.*?'
+            r'(?:class="result__snippet"[^>]*>(.*?)</a>)?',
+            page, re.S)
+        for href, title, snip in blocks:
+            url = urllib.parse.unquote(href)
+            if "uddg=" in url:
+                m = re.search(r"uddg=([^&]+)", url)
+                if m:
+                    url = urllib.parse.unquote(m.group(1))
+            t = html.unescape(re.sub(r"<[^>]+>", "", title)).strip()
+            s = html.unescape(re.sub(r"<[^>]+>", "", snip or "")).strip()
+            if t and url.startswith("http") and "duckduckgo.com/y.js" not in url \
+                    and url not in seen:
+                seen.add(url)
+                out.append({"title": t, "url": url, "snippet": s[:300]})
+            if len(out) >= n:
+                break
+        return out
+
+    def _engine_ddg_lite(self, query: str, n: int) -> List[dict]:
+        body = urllib.parse.urlencode({"q": query}).encode()
+        page = _get("https://lite.duckduckgo.com/lite/", data=body)
+        out, seen = [], set()
+        for href, title, snip in re.findall(
+                r'<a[^>]+href="([^"]+)"[^>]*class="result-link"[^>]*>(.*?)</a>.*?'
+                r'(?:<td[^>]*class="result-snippet"[^>]*>(.*?)</td>)?', page, re.S):
+            url = urllib.parse.unquote(href)
+            if "uddg=" in url:
+                m = re.search(r"uddg=([^&]+)", url)
+                if m:
+                    url = urllib.parse.unquote(m.group(1))
+            t = html.unescape(re.sub(r"<[^>]+>", "", title)).strip()
+            s = html.unescape(re.sub(r"<[^>]+>", "", snip or "")).strip()
+            if t and url.startswith("http") and url not in seen:
+                seen.add(url)
+                out.append({"title": t, "url": url, "snippet": s[:300]})
+            if len(out) >= n:
+                break
+        return out
+
+    def _engine_bing(self, query: str, n: int) -> List[dict]:
+        page = _get("https://www.bing.com/search?" + urllib.parse.urlencode({"q": query}))
+        out, seen = [], set()
+        for block in re.findall(r'<li class="b_algo".*?</li>', page, re.S)[:n * 2]:
+            m = re.search(r'<h2[^>]*><a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', block, re.S)
+            s = re.search(r'<p[^>]*>(.*?)</p>', block, re.S)
+            if not m:
+                continue
+            url = html.unescape(m.group(1))
+            t = html.unescape(re.sub(r"<[^>]+>", "", m.group(2))).strip()
+            sn = html.unescape(re.sub(r"<[^>]+>", "", s.group(1) if s else "")).strip()
+            if t and url.startswith("http") and url not in seen:
+                seen.add(url)
+                out.append({"title": t, "url": url, "snippet": sn[:300]})
+            if len(out) >= n:
+                break
+        return out
+
+    def _engine_mojeek(self, query: str, n: int) -> List[dict]:
+        page = _get("https://www.mojeek.com/search?" + urllib.parse.urlencode({"q": query}))
+        out, seen = [], set()
+        for href, title, snip in re.findall(
+                r'<a[^>]+class="ob"[^>]+href="([^"]+)"[^>]*>(.*?)</a>.*?'
+                r'<p class="s">(.*?)</p>', page, re.S):
+            url = html.unescape(href)
+            t = html.unescape(re.sub(r"<[^>]+>", "", title)).strip()
+            s = html.unescape(re.sub(r"<[^>]+>", "", snip or "")).strip()
+            if t and url.startswith("http") and url not in seen:
+                seen.add(url)
+                out.append({"title": t, "url": url, "snippet": s[:300]})
+            if len(out) >= n:
+                break
+        return out
+
     def web_search(self, query: str, max_results: int = 0) -> ToolResult:
         n = max_results or self.max_results
         results: List[dict] = []
-        try:
-            body = urllib.parse.urlencode({"q": query}).encode()
-            page = _get("https://html.duckduckgo.com/html/", data=body)
-            blocks = re.findall(
-                r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>.*?'
-                r'(?:class="result__snippet"[^>]*>(.*?)</a>)?',
-                page, re.S)
-            for href, title, snip in blocks:
-                url = urllib.parse.unquote(href)
-                if "uddg=" in url:
-                    m = re.search(r"uddg=([^&]+)", url)
-                    if m:
-                        url = urllib.parse.unquote(m.group(1))
-                t = html.unescape(re.sub(r"<[^>]+>", "", title)).strip()
-                s = html.unescape(re.sub(r"<[^>]+>", "", snip or "")).strip()
-                if t and url.startswith("http"):
-                    results.append({"title": t, "url": url, "snippet": s[:300]})
-                if len(results) >= n:
-                    break
-        except Exception as e:  # noqa: BLE001
-            return ToolResult(False, error=f"Search failed: {e}")
+        errors: List[str] = []
+        # layered fallback so one blocked engine never zeroes the research leg
+        for engine in (self._engine_ddg_html, self._engine_ddg_lite,
+                       self._engine_bing, self._engine_mojeek):
+            try:
+                results = engine(query, n)
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"{engine.__name__}: {type(e).__name__}")
+                continue
+            if results:
+                break
 
         if not results:
-            # Fallback: DuckDuckGo instant answer API
+            # last resort: DuckDuckGo instant answer API
             try:
                 j = json.loads(_get("https://api.duckduckgo.com/?" + urllib.parse.urlencode(
                     {"q": query, "format": "json", "no_html": 1})))
@@ -94,7 +164,9 @@ class WebTools:
                 pass
 
         if not results:
-            return ToolResult(False, error=f"No results for '{query}' (network blocked?)")
+            hint = "; ".join(errors[-2:]) or "all engines empty"
+            return ToolResult(False, error=f"No results for '{query}' ({hint}). "
+                                           "Try a simpler 2-3 keyword query and retry.")
         text = "\n\n".join(f"[{i + 1}] {r['title']}\n    {r['url']}\n    {r['snippet']}"
                            for i, r in enumerate(results))
         return ToolResult(True, output=f"Search results for '{query}':\n\n{text}", data=results)
