@@ -37,6 +37,12 @@ ACTION_CLAIM = _re.compile(
     r"\b(deleted|removed|created|wrote|built|saved|i\s?have|i've|done)\b", _re.I)
 # Device/system questions — the router used to answer "no access" even
 # though system_info/termux-api can actually check them.
+IMAGE_PATH_RE = _re.compile(
+    r"(?i)(/[^\n\"']+\.(?:png|jpe?g|gif|webp|bmp|heic|heif)"
+    r"|[\w./\\ -]+\.(?:png|jpe?g|gif|webp|bmp|heic|heif))")
+SEE_IMAGE_Q = _re.compile(
+    r"(?i)\b(dikh|dekho|dekh|look|see|show|describe|kya.*(image|photo|pic|png)"
+    r"|what.*(image|photo|picture|png)|is (image|photo))\b")
 DEVICE_Q = _re.compile(
     r"\b(battery|charging|power|storage|disk|space|memory|ram|cpu|temperature|"
     r"overheat|network|wifi|signal|ip\s?address|internet|connect|device|phone|"
@@ -156,6 +162,13 @@ def router_guard(goal: str, decision: Dict[str, Any]) -> tuple:
     direct = str(d.get("direct_answer") or "").strip()
     # Casual / short / unclear with no action verb: NEVER force a DAG.
     # Do not invent a canned "not sure what X means" — the router LLM replies.
+    if IMAGE_PATH_RE.search(goal or "") and SEE_IMAGE_Q.search(goal or ""):
+        d["needs_orchestration"] = True
+        d["intent"] = "file_ops"
+        d["task_type"] = "vision"
+        d["model_hint"] = "worker"
+        d["direct_answer"] = ""
+        return d, True
     if looks_like_noise(goal) and not ACTION_VERB.search(goal):
         d["needs_orchestration"] = False
         d["intent"] = "chat"

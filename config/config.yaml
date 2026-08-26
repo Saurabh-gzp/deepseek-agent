@@ -5,7 +5,7 @@
 
 app:
   name: "Nexus"
-  version: "1.9.6"
+  version: "1.9.7"
   workspace: "./workspace"          # agent ka sandbox / project directory
   data_dir: "./.nexus"              # db, vectors, logs, sessions
   theme: "cocoa"                    # cyber | mono | matrix
@@ -111,6 +111,11 @@ models:
   safety:
     model: mistral-moderation-2603
     fallback: []
+  vision:
+    model: pixtral-12b-2409
+    fallback: [pixtral-large-2411, mistral-small-2603]
+    temperature: 0.2
+    max_tokens: 2048
 
 # ----------------------------------------------------------
 # RATE LIMITS  (requests per second per model)
@@ -145,6 +150,8 @@ rate_limits:
   mistral-embed-2312: 0.95
   codestral-embed: 0.95
   mistral-moderation-2603: 0.95
+  pixtral-12b-2409: 0.8
+  pixtral-large-2411: 0.4
   default: 1.5
 
 # ----------------------------------------------------------

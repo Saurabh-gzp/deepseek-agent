@@ -18,7 +18,7 @@ from ..core.jsonutil import extract_field, extract_json
 from .base import AgentOutcome, BaseAgent
 
 READ_ONLY = ["read_file", "list_dir", "search_files", "find_files", "load_skill",
-             "search_knowledge", "system_info"]
+             "search_knowledge", "system_info", "see_image", "read_document"]
 WEB = ["web_search", "web_fetch", "http_request"]
 WRITE = ["write_file", "edit_file", "move_path"]
 EXEC = ["run_shell", "run_python", "install_package", "start_server"]
@@ -196,7 +196,10 @@ class SupervisorAgent(BaseAgent):
         "- Tasks writing to the SAME file must NOT be parallel_safe together; use depends_on.\n"
         "- CODE + BUG FIXES → coder. WEBSITE CODING / UI DESIGN → coder (frontend skill). "
         "Generic shell-only or data work → worker.\n"
-        "- DEVICE/SYSTEM queries (storage, battery, wifi, memory, phone info): exactly ONE "
+        "- IMAGE/VISION (user pastes a .png/.jpg path or asks kya dikh rha): "
+"exactly ONE worker task that calls see_image(path=exact file including spaces) "
+"and reports the pixels. Do NOT only ls the folder. Phone /storage/emulated/0 is allowed.\n"
+"- DEVICE/SYSTEM queries (storage, battery, wifi, memory, phone info): exactly ONE "
         "worker task that calls `device_info` + `system_info` and summarises what they return — INCLUDING any explicit 'unavailable' notes (e.g. signal strength when Termux:API is missing is a complete, acceptable answer). "
         "Do NOT plan command experiments, do NOT use coder, do NOT invent shell paths — "
         "Termux has no /sdcard; correct paths are ~/storage/* and /data/data/com.termux/...\n"
@@ -417,7 +420,10 @@ class WorkerAgent(BaseAgent):
         "(yes/always/no) and proceeds on approval. Do NOT ask the user for deletion "
         "permission in your text output, do NOT use rm/shred in run_shell (hard-blocked) — "
         "just call delete_path for every file/folder and report the results.\n"
-        "DEVICE QUESTIONS: you run on the user's device. NEVER say you cannot check "
+        "IMAGES: if the user gives a .png/.jpg/.webp path (even under "
+"/storage/emulated/0/), call see_image(path=that exact file). list_dir/ls is NOT "
+"an answer to what is in the picture.\n"
+"DEVICE QUESTIONS: you run on the user's device. NEVER say you cannot check "
         "battery/storage/network/system — and NEVER guess shell commands. Call "
         "device_info(detail='storage,battery,network,memory') FIRST — it does ALL the "
         "probing itself (Python-first, which-guarded) and reports values OR explicit "
