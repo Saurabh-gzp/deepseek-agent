@@ -41,6 +41,34 @@ class TestKeyRing:
             for n in names:
                 os.environ.pop(n, None)
 
+    def test_rotation_no_cap_tries_every_key(self):
+        """v1.8.2: max_key_rotations_per_call=0 means NO cap — a 3-key ring gets
+        exactly 3 tries per call (one per key), not max(6,3)=6 with re-uses."""
+        import io
+        import urllib.error
+        from email.message import Message
+        import nexus.providers.mistral as mm
+        ring = KeyRing("mistral", ["a", "b", "c"])
+        prov = mm.MistralProvider({"max_key_rotations_per_call": 0}, ring,
+                                  notifier=lambda *a, **k: None)
+        auths = []
+        orig_urlopen = mm.urllib.request.urlopen
+        orig_sleep = mm.time.sleep
+        def fake_urlopen(req, timeout=None):
+            auths.append(req.get_header("Authorization"))
+            raise urllib.error.HTTPError(req.full_url, 429, "rate limited",
+                                         Message(), io.BytesIO(b'{"error":"e"}'))
+        try:
+            mm.urllib.request.urlopen = fake_urlopen
+            mm.time.sleep = lambda s: None
+            with pytest.raises(Exception):
+                prov._request("/chat/completions", {})
+        finally:
+            mm.urllib.request.urlopen = orig_urlopen
+            mm.time.sleep = orig_sleep
+        assert len(auths) == 3, f"expected 3 tries (one per key), got {len(auths)}"
+        assert sorted(a.split()[-1] for a in auths) == ["a", "b", "c"]
+
     def test_discover_and_rotate(self):
         ring = KeyRing("test", ["k1", "k2", "k3"])
         assert len(ring) == 3

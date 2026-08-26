@@ -1,6 +1,16 @@
 # Changelog
 
+## [1.8.2] — rotation kap bhi nahi: jitne keys, utni tries
+
+`max_key_rotations_per_call` ab **0 = no cap**: har call me ring ke HAR key ko try
+karta hai (pehle max(6, len) tha — ab sirf len). Sab cooling ho to ring ≤45s wait
+karke soonest key se retry karti hai — agent pause karta hai, kabhi DIE nahi karta.
+README me naya section: keys ki minimum/ideal count ka hisaab (peak ~1.5-3 rps →
+5-6 minimum, 10 = safe) + `MISTRAL_APIS="k1,k2,..."` bulk form + "alag accounts
+best" note (per-org quotas stack nahi karte same org me).
+
 ## [1.8.1] — multi-key pools: run 10+ Mistral keys in one job
+ — multi-key pools: run 10+ Mistral keys in one job
 
 `KeyRing.discover` now scans `MISTRAL_API_KEY_1.._20` (earlier: .._9) and still
 supports the bulk form `MISTRAL_APIS="key1,key2,..."`. A 10-key pool absorbs the

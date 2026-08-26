@@ -5,7 +5,7 @@
 
 app:
   name: "Nexus"
-  version: "1.8.1"
+  version: "1.8.2"
   workspace: "./workspace"          # agent ka sandbox / project directory
   data_dir: "./.nexus"              # db, vectors, logs, sessions
   theme: "cocoa"                    # cyber | mono | matrix
@@ -244,7 +244,8 @@ failover:
   notify_user: true              # tell the user when keys switch
   cooldown_seconds: 60           # rate-limited key ko itni der rest
   hard_fail_cooldown: 600        # invalid/quota key ka lamba cooldown
-  max_key_rotations_per_call: 6
+  max_key_rotations_per_call: 0   # 0 = no cap: EVERY added key participates in rotation
+                                  # (ring waits ≤45s when all keys cool, then retries)
   retry_backoff_base: 1.5
 
 # ui.fancy_input: true  → enable prompt_toolkit input: slash autocomplete,

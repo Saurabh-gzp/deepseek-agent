@@ -34,7 +34,10 @@ class MistralProvider(BaseProvider):
         """POST with automatic key rotation."""
         tried: set = set()
         last_err: Optional[ProviderError] = None
-        rotations = max(self.max_rotations, len(self.keyring) or 1)
+        # v1.8.2: NO artificial rotation cap — every key in the ring gets tried,
+        # and if all are cooling the ring waits (≤45s) and retries the soonest.
+        # The agent can never hit "no keys left"; it only pauses briefly.
+        rotations = max(len(self.keyring) or 1, 1)
 
         for attempt in range(rotations):
             key = self.keyring.acquire(exclude=tried)

@@ -288,6 +288,37 @@ large_model_calls_per_task: 1
 
 ---
 
+## API keys: kitne chahiye taaki 429 kabhi na ruke (multi-key pools)
+
+Mistral 429 storms (live run: dozens of `rate-limited -> cooling` events) are
+absorbed by the KeyRing. **No artificial rotation cap**: every key you add
+participates in rotation; when all keys cool, the ring waits (≤45s) and retries
+the soonest — the agent pauses briefly, it never dies.
+
+**Keys add karne ke 3 tarike** (sab ek saath chalte hain):
+```bash
+export MISTRAL_APIS="key1,key2,key3,..."        # ek hi var me 10+ keys (best)
+# ya numbered:
+export MISTRAL_API_KEY_1="..." ... MISTRAL_API_KEY_10="..."
+# ya CLI:  nexus keys add <key>
+```
+
+**Hisaab (kitni keys?)** — limits per API key (free/Experiment tier: ~1 rps +
+500k tok/min per key; paid tiers zyada). Ek run me peak concurrency ≈ 4 streams
+(3 parallel tasks + critic), har stream ~0.2-0.5 rps → **peak ≈ 1.5-3 rps**.
+Isliye:
+
+| Keys (alag accounts) | Aggregate capacity | Result |
+|---|---|---|
+| 1-2 | ~1-2 rps | bina margin — storms par pause (jaise live run me) |
+| 4-6 | ~4-6 rps | stable; shayad hi kabhi wait |
+| **10+** | **~10+ rps** | **kabhi nahi rukega** (3-5× margin) |
+
+Rule of thumb: `ceil(peak_rps / per_key_rps) + 2` = **5-6 minimum, 10 = safe**.
+🗝️ **Same account ki multiple keys vs alag accounts:** ho sake to **alag accounts**
+use karein — per-org quotas (e.g. tok/min, monthly) alag accounts pe fully stack
+karte hain; same org ki keys sirf per-key line help karti hain.
+
 ## What's new in v1.7.0 — web search that never gives up
 
 - **7 search engines with health-aware rotation**: DuckDuckGo HTML/Lite → Bing →
