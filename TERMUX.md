@@ -28,13 +28,20 @@ is still enough to run.
 Launch the agent:
 
 ```bash
-python3 nexus.py
+nexus
 ```
 
 The first run opens the key wizard by itself — paste your **Mistral AI**
 key (free: [console.mistral.ai](https://console.mistral.ai)). Keys are
 stored only on your device (`keys/`, chmod 600, gitignored). Add more
 anytime with `/keys add sk-...`.
+
+`setup.sh` also installs a global `nexus` command (removing any older
+`nexus` command or alias first), so you can launch from anywhere with:
+
+```bash
+nexus
+```
 
 That's it. Now just talk to it:
 

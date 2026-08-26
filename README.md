@@ -57,14 +57,19 @@ What `setup.sh` does:
 2. **Python deps** — `rich`, `PyYAML`, `numpy`, `prompt_toolkit`
 3. **Old-install cleanup** — removes any previously saved keys/config, so the
    fresh clone stores its own keys in this directory
-4. **Self-test** — verifies the core imports
-5. **Prints the launch command**
+4. **`nexus` command** — removes any pre-existing `nexus` command/alias and installs its own launcher
+5. **Self-test** — verifies the core imports
+6. **Prints the launch command**
 
-Then launch the agent:
+Then launch the agent — just one word, from anywhere:
 
 ```bash
-python3 nexus.py
+nexus
 ```
+
+`setup.sh` installs this command for you: it removes any pre-existing
+`nexus` command or alias and installs its own launcher (`python3 nexus.py`
+still works inside the repo folder too).
 
 On the first run the key wizard opens by itself — paste your **Mistral AI**
 key (free: [console.mistral.ai](https://console.mistral.ai)) and you're done.
@@ -86,10 +91,10 @@ git pull && bash setup.sh --update
 ## Run
 
 ```bash
-python nexus.py                          # interactive REPL
-python nexus.py "build me a todo API"    # one-shot
-python nexus.py -m never "fix the bug"   # full autonomy, no confirmations
-python nexus.py -w ~/projects/myapp      # point at an existing project
+nexus                                    # interactive REPL
+nexus "build me a todo API"               # one-shot
+nexus -m never "fix the bug"             # full autonomy, no confirmations
+nexus -w ~/projects/myapp                # point at an existing project
 ```
 
 | Flag | Meaning |
@@ -364,7 +369,7 @@ In real TUI runs the agent attempted these evasions — all blocked by determini
 
 ### See it all in one round
 ```bash
-python3 nexus.py
+nexus
 nexus ❯ /keys
 nexus ❯ hello, who are you?                    # router direct — supervisor bypass
 nexus ❯ /auto Create squares.py that prints 1-10 squares, run it, save output to squares.txt

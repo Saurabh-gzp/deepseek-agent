@@ -80,18 +80,61 @@ else
     fi
 fi
 
-# ── 5. Sanity: launcher import test ────────────────────────────
+# ── 5. Install the `nexus` launcher command ───────────────────
+step "Installing the 'nexus' command"
+REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# 5a. Remove ANY existing 'nexus' command (binary, wrapper, alias)
+for d in "${PREFIX:-/nonexistent}/bin" /usr/local/bin /usr/bin "$HOME/.local/bin" "$HOME/bin"; do
+    [ -n "$d" ] && [ -f "$d/nexus" ] && rm -f "$d/nexus" && ok "removed old 'nexus' at $d/nexus"
+done
+for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile" "$HOME/.bash_profile"; do
+    if [ -f "$rc" ] && grep -q "alias nexus=" "$rc" 2>/dev/null; then
+        sed -i '\|alias nexus=|d' "$rc"
+        ok "removed old 'alias nexus=…' from $rc (restart your shell)"
+    fi
+done
+
+# 5b. Pick an install dir that is on PATH (or can be added)
+BIN_DIR=""
+if [ -n "${PREFIX:-}" ] && [ -d "$PREFIX/bin" ] && [ -w "$PREFIX/bin" ]; then
+    BIN_DIR="$PREFIX/bin"                                   # Termux
+elif case ":$PATH:" in *":$HOME/.local/bin:"*) true;; *) false;; esac; then
+    BIN_DIR="$HOME/.local/bin"                              # Linux/macOS, already on PATH
+elif case ":$PATH:" in *":$HOME/bin:"*) true;; *) false;; esac; then
+    BIN_DIR="$HOME/bin"
+elif [ -w /usr/local/bin ]; then
+    BIN_DIR="/usr/local/bin"
+else
+    mkdir -p "$HOME/.local/bin" && BIN_DIR="$HOME/.local/bin"
+    for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
+        [ -f "$rc" ] || continue
+        grep -q 'export PATH="$HOME/.local/bin:$PATH"' "$rc" || {
+            printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$rc"
+        }
+    done
+    warn "$HOME/.local/bin added to PATH via your shell rc — restart the shell once"
+fi
+
+# 5c. Write the wrapper
+printf '#!/usr/bin/env bash\nexec python3 "%s/nexus.py" "$@"\n' "$REPO_DIR" > "$BIN_DIR/nexus"
+chmod +x "$BIN_DIR/nexus"
+ok "'nexus' command installed → $BIN_DIR/nexus"
+
+# ── 6. Sanity: launcher import test ────────────────────────────
 step "Self-test"
 python3 -c "from nexus.cli.app import main" 2>/dev/null \
     && ok "Agent core loaded" \
     || die "core import failed — please open an issue"
 
-# ── 6. Launch instructions ─────────────────────────────────────
+# ── 7. Launch instructions ─────────────────────────────────────
 printf "\n${BOLD}${GREEN}══════════════ SETUP COMPLETE ══════════════${R}\n"
 printf """
-${BOLD}To launch the agent, type:${R}
+${BOLD}To launch the agent, just type:${R}
 
-    ${CYAN}python3 nexus.py${R}
+    ${CYAN}nexus${R}
+
+(and ${CYAN}python3 nexus.py${R} still works too)
 
 On the first run the agent opens an API-key wizard itself and
 asks for your ${BOLD}Mistral AI${R} key (free: console.mistral.ai).
