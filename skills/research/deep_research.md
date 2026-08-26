@@ -8,6 +8,31 @@ agents: ["researcher", "worker", "supervisor"]
 
 # Skill: Deep Research
 
+## 0. Using the search tool (MANDATORY — v1.7)
+The system's `web_search` tool auto-rotates 7 engines (DuckDuckGo HTML/Lite,
+Bing, SearXNG, Mojeek, Wikipedia, DDG instant-answer) and caches queries. To get
+the best out of it:
+- **Plain 2–4 keyword queries ONLY.** NEVER `site:`, `filetype:`, `inurl:`,
+  `"exact quotes"`, `AND/OR` operators — the engines return nothing for them.
+  ✅ `claude ai frontend design`  ❌ `site:claude.com frontend design best practices`
+- **Short beats long.** If you get "No results", simplify to 2–3 keywords and
+  retry ONCE — then move on. A failed long query is NOT a dead end; a repeated
+  identical query is wasted time (it just hits cache or the blocked engine).
+- **Never re-run the same query.** Identical queries are served from cache — if
+  you need new results, change the wording.
+- Engines fail independently; the tool already falls back. If ONE query fails,
+  continue with a reworded query — never abandon the research because of it.
+- Search is Step 1, not the whole job: after 2+ solid results, **fetch the top
+  pages** with `web_fetch` and extract evidence. Search snippets alone are not
+  citations.
+- If the topic names a specific product/skill/tool (e.g. "Claude AI skills",
+  "MCP"), search those EXACT terms and fetch the FIRST-PARTY page — generic
+  substitutes are a failure.
+- **Write the report file as soon as you have ≥2 confirmed sources**, even if
+  some sub-questions are still thin — note the gaps honestly in the report
+  rather than burning steps on more searches. A research task with 2 good
+  sources + honest gaps PASSES; a task that never writes the file FAILS.
+
 ## Process
 ```
 DEFINE questions → SEARCH broad → TRIANGULATE (3+ sources) → EXTRACT with citations
@@ -20,13 +45,13 @@ Write 3–6 specific sub-questions. "Research electric cars" is not a question;
 Note what a *good* answer looks like: numbers, dates, named entities, tradeoffs.
 
 ## 2. Query craft
-| Goal | Query pattern |
+| Goal | Query pattern (plain keywords — NO operators) |
 |---|---|
 | Current facts | `topic 2026` / `topic latest` |
-| Official truth | `site:docs.x.com topic` / `topic official documentation` |
+| Official truth | `topic official documentation` / `topic docs` (then fetch the official site) |
 | Comparison | `X vs Y benchmark` / `X alternatives comparison` |
-| Numbers | `topic statistics report pdf` |
-| Practical | `topic tutorial site:github.com` / `topic "how we"` |
+| Numbers | `topic statistics report` |
+| Practical | `topic tutorial example` |
 | Criticism | `topic problems limitations criticism` ← always run this one |
 
 Run 3–5 varied queries, not one. Vary vocabulary (technical + colloquial).

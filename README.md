@@ -288,6 +288,22 @@ large_model_calls_per_task: 1
 
 ---
 
+## What's new in v1.7.0 — web search that never gives up
+
+- **7 search engines with health-aware rotation**: DuckDuckGo HTML/Lite → Bing →
+  SearXNG → Mojeek → Wikipedia → DDG instant-answer. Root cause fixed: DDG
+  rate-limits after ~2-3 rapid queries (anomaly page), which used to kill the
+  whole research leg — now a blocked engine is demoted 120s and the others pick
+  up the query (Bing is independent and keeps working during a DDG block).
+- **Query cache (600s)** — re-running the same query costs 0 engine hits.
+- **Result merging + dedup** across engines; bing `ck/a` and ddg `uddg`
+  redirects unwrapped; ad results dropped.
+- **web_fetch hardening**: mobile UA → desktop UA → reader-proxy fallback.
+- **deep_research skill §0 (mandatory)**: plain 2-4 keyword queries only (never
+  `site:`/operators — they return nothing), simplify-once-then-move-on, never
+  re-run the same query, write the report after 2+ confirmed sources. Live:
+  "Claude AI frontend design" research now fetches Anthropic's own pages.
+
 ## What's new in v1.6.0 — sutra-style discipline (no wrong commands)
 
 - `device_info` is now pure-Python + `which()`-guarded: it reports REAL values

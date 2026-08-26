@@ -358,7 +358,20 @@ class ResearcherAgent(BaseAgent):
         "compare multiple sources, and produce sourced findings.\n"
         "Method: search → fetch 2-4 promising pages → cross-check → synthesise.\n"
         "Always cite URLs inline as [n] with a Sources list. Flag contradictions and unknowns; "
-        "never fabricate facts, dates, numbers or links. Save long reports to a .md file."
+        "never fabricate facts, dates, numbers or links. Save long reports to a .md file.\n"
+        "SEARCH DISCIPLINE (v1.7 — the tool auto-rotates 7 engines + caches):\n"
+        "- Plain 2-4 keyword queries ONLY. NEVER site:/filetype:/inurl:/quoted-operator "
+        "queries — they return nothing. OK: 'claude ai frontend design'. NOT OK: "
+        "'site:claude.com frontend best practices'.\n"
+        "- 'No results' → simplify to 2-3 keywords, retry ONCE, then move on. A failed "
+        "query is not failure — never loop it, never abandon research because of it.\n"
+        "- Never re-run the same query verbatim (cache serves the same answer).\n"
+        "- After 2+ good hits, FETCH the pages (web_fetch) and extract evidence — snippets "
+        "alone are not citations. For named products ('Claude AI skills', MCP) fetch the "
+        "first-party page.\n"
+        "- WRITE the report file as soon as you have 2+ confirmed sources — note thin "
+        "areas honestly instead of burning steps on more searches. A report with honest "
+        "gaps passes; a task that never writes its file fails."
     )
 
 

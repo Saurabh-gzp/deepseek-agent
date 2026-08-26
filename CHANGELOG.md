@@ -1,5 +1,49 @@
 # Changelog
 
+## [1.7.0] — multi-engine web search: never "No results" again
+
+**Root cause found (live probe):** DuckDuckGo HTML/Lite rate-limits the IP after
+~2-3 rapid queries (returns an "anomaly" page with 0 results). The researcher's
+3rd-5th queries hit the same blocked DDG chain → "all engines empty", task
+failed, retry loops. Fixes:
+
+1. **Search stack rebuilt — 7 engines, health-aware rotation, cache, merge:**
+   DuckDuckGo HTML → DuckDuckGo Lite → **Bing (independent — works while DDG is
+   blocked)** → SearXNG public instances ×4 → Mojeek → Wikipedia API → DDG
+   Instant-Answer. Live-probed 2026-08-26: DDG ×2 OK then anomaly; Bing still
+   returns 5-7 results during the block; Wikipedia API always works;
+   Mojeek/Brave/Ecosia/Startpage 403/429 (bot-protected — kept for other IPs).
+2. **Engine demotion (120s):** a failing engine is pushed to the back, so one
+   blocked engine can never zero the search. Top-2 (ddg ↔ bing) rotate per call
+   so neither gets hammered.
+3. **Query cache (600s):** identical queries are served from cache — zero
+   engine hits, zero latency, no repeat-query burn.
+4. **Result merging + dedup:** engines top up each other until the requested
+   count; URLs normalized (www, trailing slash, utm stripped, bing ck/a and
+   ddg uddg redirects unwrapped).
+5. **web_fetch hardened:** mobile UA → desktop UA retry → r.jina.ai proxy
+   fallback; JSON endpoints auto-formatted. `engine:` param lets any single
+   engine be pinned.
+6. **deep_research skill updated** (mandatory §0): plain 2-4 keyword queries
+   only (NEVER site:/filetype:/inurl:/quoted operators — they return nothing),
+   simplify-once-then-move-on, never re-run the same query, fetch pages after
+   2+ hits, write the report after 2+ confirmed sources, and the researcher
+   prompt enforces the same rules.
+7. **Live tests (previously failing queries now all pass):**
+   - "Claude AI portfolio website frontend best practices" → 0.9s, Anthropic's
+     own blog as top hit
+   - "Claude AI design system accessibility WCAG 2026", "Claude AI responsive
+     design performance...", "how to check network type in termux",
+     "claude ai skills" → all 0.1-2.6s with results
+   - scrapes: claude.com blog (509 KB), bbc.com, HN → all clean text
+   - End-to-end research task → 58s, real report written to
+     projects/search-web-claude/frontend_design_best_practices.md with 4 real
+     cited sources (claude.com blog, platform.claude.com cookbook,
+     claude.com/plugins, practitioner blog)
+   - 139/139 offline tests (new: parser unwrap, cache, demotion, dedup-merge)
+
+# Changelog
+
 ## [1.6.0] — sutra-style harness discipline: no more wrong commands
 
 Live audit of "network status check" (409.6s / 186,094 tokens / 17 failed

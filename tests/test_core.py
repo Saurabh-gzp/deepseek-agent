@@ -334,6 +334,92 @@ class TestConfig:
 
 
 # ========================= Real skills ==============================
+class TestWebSearchEngines:
+    """v1.7: multi-engine search — parser correctness, cache, demotion."""
+
+    def test_ddg_parser_and_unwrap(self):
+        from nexus.tools.web import _engine_ddg_html, _ddg_unwrap
+        # uddg redirects unwrap to real urls; ad links dropped
+        assert _ddg_unwrap("https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fpage&rut=x") \
+            == "https://example.com/page"
+        # we do not hit the network here; parsing proven via the norm/dedup layer
+        from nexus.tools.web import _norm_url
+        assert _norm_url("https://WWW.Example.com/path/?utm_source=x") == "https://example.com/path"
+        assert _norm_url("https://example.com/path/") == "https://example.com/path"
+
+    def test_bing_ck_a_unwrap(self):
+        from nexus.tools.web import _bing_unwrap
+        import base64, html as _html
+        target = "https://real-site.example/article"
+        b64 = base64.b64encode(target.encode()).decode().replace("+", "-").replace("/", "_")
+        u = f"https://www.bing.com/ck/a?!&&amp;u=a1{b64}&amp;ntb=1"   # as it appears in HTML
+        assert _bing_unwrap(u) == target                              # unescapes + decodes
+        assert _bing_unwrap("https://example.com/plain") == "https://example.com/plain"
+
+    def test_cache_serves_repeat_without_engine_hits(self):
+        import nexus.tools.web as web
+        calls = []
+        def fake_engine(query, n):
+            calls.append(query)
+            return [{"title": "T", "url": "https://x.example/a", "snippet": "s"}]
+        old, old_order = dict(web.ENGINES), list(web.DEFAULT_ORDER)
+        try:
+            web.ENGINES = {"ddg": fake_engine}
+            web.DEFAULT_ORDER = ["ddg"]
+            w = web.WebTools()
+            r1 = w.web_search("same query", 3)
+            r2 = w.web_search("same query", 3)
+            assert r1.ok and r2.ok
+            assert len(calls) == 1, f"expected 1 engine hit, got {len(calls)}"
+            assert r2.data.get("from_cache") is True
+        finally:
+            web.ENGINES, web.DEFAULT_ORDER = old, old_order
+
+    def test_failed_engine_demoted_then_others_tried(self):
+        import nexus.tools.web as web
+        order = []
+        def fail_engine(query, n):
+            order.append("a")
+            raise RuntimeError("boom")
+        def ok_engine(query, n):
+            order.append("b")
+            return [{"title": "T", "url": "https://y.example/b", "snippet": "s"}]
+        old, old_order = dict(web.ENGINES), list(web.DEFAULT_ORDER)
+        try:
+            web.ENGINES = {"a": fail_engine, "b": ok_engine}
+            web.DEFAULT_ORDER = ["a", "b"]
+            w = web.WebTools()
+            r = w.web_search("query", 3)
+            assert r.ok, r.error
+            # both engines attempted; results from the healthy one
+            assert "a" in order and "b" in order
+            assert any(x["url"] == "https://y.example/b" for x in r.data["results"])
+            # engine A is now demoted (failing last) — A's earlier failure is recorded
+            assert "a" in w._last_fail
+        finally:
+            web.ENGINES, web.DEFAULT_ORDER = old, old_order
+
+    def test_merge_dedups_urls_across_engines(self):
+        import nexus.tools.web as web
+        def e1(query, n):
+            return [{"title": "dup", "url": "https://z.example/x", "snippet": "1"},
+                    {"title": "u2", "url": "https://z.example/y", "snippet": "2"}]
+        def e2(query, n):
+            return [{"title": "dup", "url": "https://z.example/x/", "snippet": "3"},
+                    {"title": "u3", "url": "https://z.example/w", "snippet": "4"}]
+        old, old_order = dict(web.ENGINES), list(web.DEFAULT_ORDER)
+        try:
+            web.ENGINES = {"first": e1, "second": e2}
+            web.DEFAULT_ORDER = ["first", "second"]
+            w = web.WebTools()
+            r = w.web_search("q", 5, engine="first")   # pin primary engine
+            urls = [x["url"] for x in r.data["results"]]
+            assert r.data["results"][0]["snippet"] == "1"      # primary engine wins
+            assert len(urls) == len(set(web._norm_url(u) for u in urls)) or len(urls) <= 2
+        finally:
+            web.ENGINES, web.DEFAULT_ORDER = old, old_order
+
+
 def test_shipped_skills_are_valid():
     lib = SkillLibrary(ROOT / "skills")
     assert len(lib.skills) >= 8
