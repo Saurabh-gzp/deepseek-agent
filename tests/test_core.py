@@ -1201,11 +1201,16 @@ class TestWorkspaceCleanFixes:
         assert "Ctrl+C = stop" in src          # live-indicator hint present
 
     def test_prompt_no_duplicate_on_dumb_terminal(self):
-        """No CPR support → _pt() returns None → stable rich input (no PT repaint)."""
+        """Fancy PT input is opt-in only → default _pt() returns None (stable input)."""
         from nexus.cli.ui import UI
         ui = UI()
-        ui._cpr_ok = False
-        assert ui._pt() is None
+        assert ui._pt() is None                    # default: stable rich input
+        import os
+        os.environ["NEXUS_FANCY_INPUT"] = "1"
+        try:
+            assert ui._pt() is not None            # opt-in enables PT
+        finally:
+            del os.environ["NEXUS_FANCY_INPUT"]
 
     def test_device_report_rules_in_prompts(self):
         """coder + critic know system partitions ≠ user storage (live 64GB bug)."""

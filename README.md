@@ -77,6 +77,17 @@ Keys are saved with chmod 600 **only on your device**, inside `keys/`.
 
 More keys = more uptime — add them anytime at runtime with `/keys add sk-...`.
 
+### Optional: fancy input (slash autocomplete)
+
+The default input is rock-stable everywhere. If you want `/`-command
+autocomplete and arrow-key history, enable the fancy input:
+
+```bash
+export NEXUS_FANCY_INPUT=1        # or set ui.fancy_input: true in config/config.yaml
+```
+
+If your terminal ever reprints the prompt on screen resize, keep it off.
+
 ### Update to the latest version
 
 ```bash

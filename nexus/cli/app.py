@@ -174,6 +174,10 @@ class NexusApp:
 
     def start(self) -> None:
         self._wire_completer()
+        try:
+            self.ui.config_opt_fancy = bool(self.config.get("ui.fancy_input", False))
+        except Exception:
+            pass
         reg = self.ctx.llm.registry
         self.ui.banner(
             self.config.get("app.version", "1.0.0"),

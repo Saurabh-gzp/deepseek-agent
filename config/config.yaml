@@ -5,7 +5,7 @@
 
 app:
   name: "Nexus"
-  version: "1.4.1"
+  version: "1.4.2"
   workspace: "./workspace"          # agent ka sandbox / project directory
   data_dir: "./.nexus"              # db, vectors, logs, sessions
   theme: "cocoa"                    # cyber | mono | matrix
@@ -228,3 +228,8 @@ failover:
   hard_fail_cooldown: 600        # invalid/quota key ka lamba cooldown
   max_key_rotations_per_call: 6
   retry_backoff_base: 1.5
+
+# ui.fancy_input: true  → enable prompt_toolkit input: slash autocomplete,
+#                           arrow-key history (env: NEXUS_FANCY_INPUT=1).
+#                           Off by default: on some terminals a resize
+#                           reprints the prompt; the default input is stable.
