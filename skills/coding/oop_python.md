@@ -17,6 +17,7 @@ User wants an *application* (not a one-file script) with domain objects.
 3. Repository methods: `add`, `get`, `list`, `report` — SQL stays in the repo.
 4. Type hints on public methods.
 5. `if __name__ == "__main__"` demo that prints a real query result.
+6. App entrypoint must use `from models import X` / `from repo import Y` — **never** `from .models` (that only works as a package and dies as `python3 app.py`).
 
 ## Checklist
 - [ ] ≥2 classes
