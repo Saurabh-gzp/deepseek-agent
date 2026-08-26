@@ -1,0 +1,230 @@
+# ==========================================================
+#  NEXUS AGENT - Main Configuration
+#  Autonomous multi-agent CLI system (Termux friendly)
+# ==========================================================
+
+app:
+  name: "Nexus"
+  version: "1.4.1"
+  workspace: "./workspace"          # agent ka sandbox / project directory
+  data_dir: "./.nexus"              # db, vectors, logs, sessions
+  theme: "cocoa"                    # cyber | mono | matrix
+  language: "auto"                  # auto | en | hi  (agent reply language)
+
+# ----------------------------------------------------------
+# PROVIDERS  -> naye provider yahan add karo (openai/groq/etc.)
+# ----------------------------------------------------------
+# API keys ka folder — /key menu yahin save karta hai (gitignored, chmod 600)
+keys:
+  dir: "./keys"
+
+providers:
+  default: mistral
+
+  mistral:
+    enabled: true
+    type: mistral                    # nexus/providers/mistral.py
+    base_url: "https://api.mistral.ai/v1"
+    # keys env se aate hain: MISTRAL_API_KEY, MISTRAL_API_KEY_2 ... ya keys.json
+    env_keys: ["MISTRAL_API_KEY", "MISTRAL_API_KEY_2", "MISTRAL_API_KEY_3"]
+    timeout: 180
+    max_retries_per_key: 2
+
+  openai:
+    enabled: false
+    type: openai_compatible
+    base_url: "https://api.openai.com/v1"
+    env_keys: ["OPENAI_API_KEY"]
+    timeout: 180
+
+  groq:
+    enabled: false
+    type: openai_compatible
+    base_url: "https://api.groq.com/openai/v1"
+    env_keys: ["GROQ_API_KEY"]
+    timeout: 120
+
+  ollama:
+    enabled: false
+    type: openai_compatible
+    base_url: "http://127.0.0.1:11434/v1"
+    env_keys: []
+    api_key: "ollama"
+    timeout: 300
+
+# ----------------------------------------------------------
+# MODEL ROLES  (role -> model + fallback chain)
+# ----------------------------------------------------------
+models:
+  supervisor:
+    model: mistral-medium-latest
+    fallback: [mistral-small-2603, ministral-8b-2512]
+    temperature: 0.3
+    max_tokens: 4096
+  router:
+    model: ministral-3b-2512
+    fallback: [ministral-8b-2512]
+    temperature: 0.0
+    max_tokens: 1024
+  worker:
+    model: ministral-8b-2512
+    fallback: [ministral-3b-2512, mistral-small-2603]
+    temperature: 0.4
+    max_tokens: 4096
+  researcher:
+    model: mistral-small-2603
+    fallback: [ministral-8b-2512]
+    temperature: 0.3
+    max_tokens: 8192
+  coder_quick:
+    model: codestral-2508
+    fallback: [devstral-2512, mistral-small-2603]
+    temperature: 0.2
+    max_tokens: 8192
+  coder_repo:
+    model: devstral-2512
+    fallback: [codestral-2508, mistral-medium-latest]
+    temperature: 0.2
+    max_tokens: 8192
+  critic:
+    model: mistral-medium-latest
+    fallback: [mistral-small-2603]
+    temperature: 0.1
+    max_tokens: 4096
+  hard_fallback:
+    model: mistral-large-2512
+    fallback: [mistral-medium-latest]
+    temperature: 0.2
+    max_tokens: 8192
+  embed:
+    model: mistral-embed-2312
+    fallback: [mistral-embed]
+  code_embed:
+    model: codestral-embed
+    fallback: [mistral-embed-2312]
+  ocr:
+    model: mistral-ocr-latest
+    fallback: [mistral-ocr-2512]
+  safety:
+    model: mistral-moderation-2603
+    fallback: []
+
+# ----------------------------------------------------------
+# RATE LIMITS  (requests per second per model)
+# Client paces to ~85% of these; a 429 pushes the model's next slot out.
+# ----------------------------------------------------------
+rate_limits:
+  ministral-3b-2512: 8.0
+  ministral-8b-2512: 2.5
+  mistral-small-2603: 2.0
+  mistral-medium-latest: 1.2
+  codestral-2508: 2.0
+  devstral-2512: 0.8
+  mistral-large-2512: 0.067
+  mistral-embed-2312: 4.0
+  codestral-embed: 4.0
+  mistral-moderation-2603: 4.0
+  default: 1.5
+
+# ----------------------------------------------------------
+# AUTONOMY CONTROLS
+# ----------------------------------------------------------
+autonomy:
+  max_subagents: 5
+  max_parallel_agents: 3
+  max_task_depth: 3
+  max_steps_per_agent: 12
+  max_retries: 2
+  task_timeout_seconds: 180
+  overall_timeout_seconds: 900
+  large_model_calls_per_task: 1
+  max_devstral_parallel: 2
+  auto_continue: true            # agent bina puche next step chalata rahe
+  reflection_every: 4            # har N steps par self-reflection
+
+# ----------------------------------------------------------
+# SAFETY / APPROVALS
+# ----------------------------------------------------------
+safety:
+  moderation_enabled: true
+  moderate_user_input: true
+  moderate_final_output: true
+  approval_mode: "smart"        # smart | always | never(yolo)
+  human_approval_required:
+    - delete_files
+    - deploy_production
+    - send_email
+    - publish_content
+    - financial_action
+    - account_change
+    - shell_dangerous
+  shell:
+    allow_network: true
+    blocked_patterns:
+      - "rm -rf /"
+      - "mkfs"
+      - ":(){:|:&};:"
+      - "dd if=/dev/zero"
+      - "chmod -R 777 /"
+      - "> /dev/sda"
+    timeout: 120
+  sandbox_root_only: true       # writes sirf workspace ke andar
+
+# ----------------------------------------------------------
+# RAG
+# ----------------------------------------------------------
+rag:
+  enabled: true
+  chunk_size: 900
+  chunk_overlap: 150
+  top_k: 6
+  min_score: 0.28
+  index_dir: "./.nexus/vectors"
+  auto_index_workspace: true
+  file_extensions: [".md", ".txt", ".py", ".js", ".ts", ".json", ".yaml", ".yml",
+                    ".html", ".css", ".sh", ".java", ".c", ".cpp", ".go", ".rs", ".rb", ".php"]
+  max_file_mb: 5
+
+# ----------------------------------------------------------
+# MEMORY
+# ----------------------------------------------------------
+memory:
+  enabled: true
+  db_path: "./.nexus/memory.db"
+  recent_window: 12
+  semantic_top_k: 5
+  save_task_summaries: true
+
+# ----------------------------------------------------------
+# SKILLS
+# ----------------------------------------------------------
+skills:
+  dir: "./skills"
+  progressive_disclosure: true   # sirf frontmatter load, body on-demand
+  max_active_skills: 3
+
+# ----------------------------------------------------------
+# TOOLS
+# ----------------------------------------------------------
+tools:
+  web_search:
+    enabled: true
+    engine: duckduckgo
+    max_results: 6
+  web_fetch:
+    enabled: true
+    max_chars: 12000
+  shell:
+    enabled: true
+  python:
+    enabled: true
+
+# ----------------------------------------------------------
+# KEY FAILOVER
+# ----------------------------------------------------------
+failover:
+  notify_user: true              # key switch hone par user ko batao
+  cooldown_seconds: 60           # rate-limited key ko itni der rest
+  hard_fail_cooldown: 600        # invalid/quota key ka lamba cooldown
+  max_key_rotations_per_call: 6
+  retry_backoff_base: 1.5

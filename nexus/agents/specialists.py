@@ -1,0 +1,469 @@
+"""Specialized sub-agents: Router, Supervisor, Worker, Researcher, Coder, Critic.
+
+Least-privilege tool sets:
+    Router     -> no tools
+    Researcher -> web + read-only fs + notes
+    Worker     -> read/write fs + python + web
+    Coder      -> full workspace + shell
+    Critic     -> read-only + shell (tests)
+    Supervisor -> planning/task tools (no destructive shell)
+"""
+from __future__ import annotations
+
+import json
+import re
+from typing import Any, Dict, List, Optional
+
+from ..core.jsonutil import extract_field, extract_json
+from .base import AgentOutcome, BaseAgent
+
+READ_ONLY = ["read_file", "list_dir", "search_files", "find_files", "load_skill",
+             "search_knowledge", "system_info"]
+WEB = ["web_search", "web_fetch", "http_request"]
+WRITE = ["write_file", "edit_file", "move_path"]
+EXEC = ["run_shell", "run_python", "install_package"]
+MEM = ["remember", "index_knowledge"]
+
+
+# ======================================================================
+class RouterAgent(BaseAgent):
+    """Fast triage — ministral-3b. Classify, estimate, route."""
+    role_key = "router"
+    agent_name = "router"
+    allowed_tools = []
+    use_skills = False
+    max_steps = 1
+    system_prompt = (
+        "You are the ROUTER of an autonomous agent system. You are fast and cheap.\n"
+        "Classify the user request and decide how it should be handled.\n"
+        "Return STRICT JSON only, no prose, no markdown fences:\n"
+        "{\n"
+        '  "intent": "chat|question|research|code|automation|data|planning|file_ops|unclear",\n'
+        '  "complexity": "trivial|simple|moderate|complex",\n'
+        '  "needs_orchestration": true|false,\n'
+        '  "suggested_agents": ["researcher"|"worker"|"coder"|"critic"],\n'
+        '  "direct_answer": "answer text ONLY if trivial chat/greeting/simple fact, else empty",\n'
+        '  "estimated_subtasks": 1-8,\n'
+        '  "priority": "low|normal|high",\n'
+        '  "duplicate_of_recent": true|false,\n'
+        '  "reason": "one short sentence"\n'
+        "}\n"
+        "Rules: greetings/small talk/simple definitions => trivial + direct_answer filled + "
+        "needs_orchestration false. Anything needing files, code, web, or multiple steps => "
+        "needs_orchestration true.\n"
+        "CRITICAL: You have NO tools — you cannot perform actions. If the request asks to "
+        "create/delete/modify/run/save ANYTHING, you MUST set needs_orchestration=true and "
+        "direct_answer=\"\" — NEVER claim you performed an action. direct_answer is ONLY for "
+        "greetings, small talk, and simple factual questions.\n"
+        "NEVER answer arithmetic yourself (you WILL get it wrong) — math always goes to "
+        "needs_orchestration=true. NEVER say you lack access to the user's device/system "
+        "(battery, storage, wifi, files) — the system has shell tools; route it with "
+        "needs_orchestration=true and suggested_agents=[\"worker\",\"coder\"].\n"
+        "LIVE INFO (weather, news, scores, prices, 'aaj/abhi/current/latest' anything) — "
+        "you have NO live data: set needs_orchestration=true with suggested_agents "
+        "[\"researcher\"]. NEVER deflect users to other websites/apps.\n\n"
+        "WHEN you fill direct_answer, you are speaking AS 'Nexus', the user's personal agent:\n"
+        "* Reply in the EXACT SAME language AND script the user used. User writes Roman "
+        "Hinglish ('kaise ho') => reply Roman Hinglish. Devanagari => Devanagari. "
+        "English => English. NEVER switch scripts on the user.\n"
+        "* Warm, human, brief (1-3 lines). Like a smart friend, not a support bot.\n"
+        "* Your name is 'Nexus'. NEVER mention router/supervisor/sub-agents/pipeline/"
+        "classification or ANY internal detail — the user only knows Nexus.\n"
+        "* If asked 'who are you': you are Nexus, an autonomous personal agent that can "
+        "code, research the web, manage files and run tasks on this device.\n"
+        "* Never apologise excessively, never say 'as an AI'."
+    )
+
+    def route(self, request: str, recent_context: str = "") -> Dict[str, Any]:
+        prompt = request if not recent_context else f"Recent context:\n{recent_context}\n\nRequest:\n{request}"
+        try:
+            raw = self.llm.ask(self.role_key, prompt, system=self.system_prompt,
+                               response_format={"type": "json_object"})
+        except Exception:
+            try:
+                raw = self.llm.ask(self.role_key, prompt, system=self.system_prompt)
+            except Exception as e:  # noqa: BLE001
+                return self._fallback(request, str(e))
+        return self._parse(raw, request)
+
+    def _parse(self, raw: str, request: str) -> Dict[str, Any]:
+        d = extract_json(raw, ["intent"])
+        if d:
+            d.setdefault("intent", "unclear")
+            d.setdefault("complexity", "moderate")
+            d.setdefault("needs_orchestration", True)
+            d.setdefault("suggested_agents", ["worker"])
+            d.setdefault("direct_answer", "")
+            d.setdefault("reason", "")
+            return d
+        return self._fallback(request, "unparseable router output")
+
+    @staticmethod
+    def _fallback(request: str, reason: str) -> Dict[str, Any]:
+        simple = len(request.split()) <= 6 and not re.search(
+            r"\b(build|create|make|fix|write|code|research|automate|deploy|analy)", request, re.I)
+        return {"intent": "chat" if simple else "unclear",
+                "complexity": "trivial" if simple else "moderate",
+                "needs_orchestration": not simple, "suggested_agents": ["worker"],
+                "direct_answer": "", "estimated_subtasks": 1 if simple else 3,
+                "priority": "normal", "duplicate_of_recent": False,
+                "reason": f"router fallback: {reason[:80]}"}
+
+
+# ======================================================================
+class SupervisorAgent(BaseAgent):
+    """Planner/orchestrator brain — mistral-medium. Plans DAG, replans on failure."""
+    role_key = "supervisor"
+    agent_name = "supervisor"
+    allowed_tools = READ_ONLY + WEB + WRITE + MEM
+    max_steps = 10
+    system_prompt = (
+        "You are the SUPERVISOR of an autonomous multi-agent system. You plan and coordinate; "
+        "you do not do heavy execution yourself.\n"
+        "Break the user's goal into a minimal DAG of concrete, verifiable subtasks and assign "
+        "each to the right specialist."
+    )
+
+    PLAN_SYSTEM = (
+        "You are the SUPERVISOR planner. Convert the goal into an executable task DAG.\n"
+        "RULE: Plan ONLY for the CURRENT GOAL. Any CONTEXT notes are background from "
+        "previous sessions — NEVER add tasks or filenames from them. Task titles must "
+        "name the exact files of the current goal.\n"
+        "RULE: If the goal creates a new app/script/website/report-set, include "
+        "\"project\": \"short-kebab-slug\" (e.g. \"calculator-app\") so files stay isolated "
+        "in projects/<slug>/. For goals operating on EXISTING files (delete/fix/read), "
+        "omit the project field.\n"
+        "RULE: DELETE/CLEANUP goals (delete/remove/clean/empty the workspace or folders): "
+        "ONE task — coder with description 'List the target paths (list_dir), then call "
+        "delete_path(path=...) for EVERY file/folder until the target is empty. The tool "
+        "itself shows the user an approval prompt — never ask for permission in text.' "
+        "NEVER plan 'confirm with user' tasks for deletions — approval is built into "
+        "delete_path.\n"
+        "RULE: NEVER create files, logs or documents just to ask the user something or " 
+        "to 'clarify' — that is absurd over-engineering. If the goal is vague/greeting/"" "
+        "unclear, output ONE task: worker with description 'Reply directly to the user — "
+        "friendly, in their language/script, ask what exactly they want. NO tools, NO "
+        "files.' acceptance: 'a short friendly clarifying question'.\n"
+        "RULE: When a project slug is set, acceptance criteria must name paths INSIDE the "
+        "project folder (projects/<slug>/file.py) — never bare root filenames.\n""RULE: If an earlier task produces research/design docs, the dependent build task "
+        "MUST read those files and its acceptance must say it applies their concrete "
+        "recommendations (name at least 3).\n"
+        "Return STRICT JSON only:\n"
+        "{\n"
+        '  "goal_restated": "one sentence",\n'
+        '  "strategy": "2-3 sentences on the approach",\n'
+        '  "tasks": [\n'
+        '    {"id":"t1","title":"short imperative title",\n'
+        '     "description":"precise instructions incl. filenames/commands the agent must use",\n'
+        '     "agent":"researcher|worker|coder|critic",\n'
+        '     "depends_on":[],\n'
+        '     "skill":"optional skill_id from the catalog",\n'
+        '     "acceptance":"objective, checkable success criterion",\n'
+        '     "parallel_safe":true}\n'
+        "  ],\n"
+        '  "final_deliverable": "what the user receives at the end"\n'
+        "}\n"
+        "Rules:\n"
+        "- 2 to 8 tasks. Fewer, meatier tasks beat many tiny ones.\n"
+        "- Tasks writing to the SAME file must NOT be parallel_safe together; use depends_on.\n"
+        "- agent=coder for writing/fixing code; researcher for web/doc gathering; "
+        "worker for summarising, formatting, data shaping; critic only for final verification.\n"
+        "- Every task needs an objective acceptance criterion (file exists, tests pass, etc.).\n"
+        "- Reference a skill_id when a matching playbook exists."
+    )
+
+    def plan(self, goal: str, context: str = "", failure_note: str = "") -> Dict[str, Any]:
+        skills = self.ctx.skills.catalog() if self.ctx.skills else ""
+        kb = self.ctx.rag.context_for(goal, max_chars=2500) if self.ctx.rag else ""
+        blocks = [f"GOAL:\n{goal}"]
+        if context:
+            blocks.append(f"CONTEXT:\n{context[:2500]}")
+        if skills:
+            blocks.append(f"SKILL CATALOG (use skill ids):\n{skills}")
+        if kb:
+            blocks.append(kb[:2000])
+        if failure_note:
+            blocks.append(f"PREVIOUS ATTEMPT FAILED — fix the plan:\n{failure_note[:1500]}")
+        blocks.append(f"Workspace: {self.config.workspace}")
+
+        prompt = "\n\n".join(blocks)
+        raw = ""
+        try:
+            raw = self.llm.ask(self.role_key, prompt, system=self.PLAN_SYSTEM,
+                               response_format={"type": "json_object"})
+        except Exception:
+            try:
+                raw = self.llm.ask(self.role_key, prompt, system=self.PLAN_SYSTEM)
+            except Exception as e:  # noqa: BLE001
+                return self._fallback_plan(goal, str(e))
+        plan = extract_json(raw, ["tasks"])
+        if not plan:
+            return self._fallback_plan(goal, "no valid JSON in plan output")
+        return self._sanitize(plan, goal)
+
+    def _sanitize(self, plan: Dict[str, Any], goal: str) -> Dict[str, Any]:
+        tasks = plan.get("tasks") or []
+        valid_agents = {"researcher", "worker", "coder", "critic"}
+        ids = set()
+        clean: List[dict] = []
+        maxt = int(self.config.get("autonomy.max_subagents", 5)) + 3
+        for i, t in enumerate(tasks[:maxt]):
+            tid = str(t.get("id") or f"t{i + 1}")
+            while tid in ids:
+                tid += "x"
+            ids.add(tid)
+            agent = str(t.get("agent", "worker")).lower()
+            clean.append({
+                "id": tid,
+                "title": str(t.get("title") or f"Task {i + 1}")[:120],
+                "description": str(t.get("description") or t.get("title") or goal),
+                "agent": agent if agent in valid_agents else "worker",
+                "depends_on": [d for d in (t.get("depends_on") or []) if isinstance(d, str)],
+                "skill": t.get("skill") or "",
+                "acceptance": str(t.get("acceptance") or "Task output is complete and correct"),
+                "parallel_safe": bool(t.get("parallel_safe", True)),
+            })
+        for t in clean:                       # drop dangling deps
+            t["depends_on"] = [d for d in t["depends_on"] if d in ids and d != t["id"]]
+        if not clean:
+            return self._fallback_plan(goal, "empty task list")
+        plan["tasks"] = clean
+        plan.setdefault("goal_restated", goal[:200])
+        plan.setdefault("strategy", "Execute the task graph and verify results.")
+        plan.setdefault("final_deliverable", "Completed goal with artifacts in the workspace.")
+        return plan
+
+    def _fallback_plan(self, goal: str, reason: str) -> Dict[str, Any]:
+        return {
+            "goal_restated": goal[:200],
+            "strategy": f"Single-agent fallback plan ({reason[:80]}).",
+            "tasks": [{"id": "t1", "title": goal[:80], "description": goal, "agent": "worker",
+                       "depends_on": [], "skill": "", "acceptance": "Goal addressed",
+                       "parallel_safe": True}],
+            "final_deliverable": "Best-effort completion",
+            "_fallback": True,
+        }
+
+    def synthesize(self, goal: str, results: List[dict], plan: Dict[str, Any]) -> str:
+        lines = [f"GOAL: {goal}", f"DELIVERABLE: {plan.get('final_deliverable', '')}", "", "RESULTS:"]
+        for r in results:
+            lines.append(f"\n### [{r['status'].upper()}] {r['title']} (agent: {r['agent']})\n"
+                         f"{str(r.get('output', ''))[:2500]}")
+        prompt = "\n".join(lines)
+        return self.llm.ask(
+            self.role_key, prompt,
+            system=("You are 'Nexus', the user's personal autonomous agent, writing the "
+                    "FINAL answer after your team finished the work.\n"
+                    "VOICE: warm, direct, human — like a smart teammate. Reply in the "
+                    "EXACT SAME language and script the user used (Roman Hinglish in => "
+                    "Roman Hinglish out; never switch to Devanagari unless the user did). "
+                    "NEVER mention agents/router/supervisor/critic/tasks/DAG or internal "
+                    "machinery — everything is 'maine kiya' / done by Nexus.\n"
+                    "Structure: 1) kya hua (accomplished) 2) key output/artifacts (file "
+                    "paths) 3) kaise use karein 4) incomplete + next step (agar hai).\n"
+                    "Be concrete and concise. Never invent results that are not in the "
+                    "data. Plain text/markdown only — no JSON dump."))
+
+
+# ======================================================================
+class WorkerAgent(BaseAgent):
+    role_key = "worker"
+    agent_name = "worker"
+    allowed_tools = READ_ONLY + WRITE + WEB + ["run_python", "run_shell",
+                                               "delete_path", "move_path"]
+    max_steps = 10
+    system_prompt = (
+        "You are a GENERAL WORKER agent. You execute one concrete subtask end-to-end: "
+        "data extraction, summarising, formatting, comparisons, simple file work and light "
+        "API/tool calls. Be efficient — use the fewest tool calls that fully complete the task. "
+        "Save substantial output to files in the workspace and report the paths.\n"
+        "DELETE/CLEANUP TASKS: deleting files has exactly ONE path — call "
+        "delete_path(path=...). It automatically shows the user an approval prompt "
+        "(yes/always/no) and proceeds on approval. Do NOT ask the user for deletion "
+        "permission in your text output, do NOT use rm/shred in run_shell (hard-blocked) — "
+        "just call delete_path for every file/folder and report the results.\n"
+        "DEVICE QUESTIONS: you run on the user's device. NEVER say you cannot check "
+        "battery/storage/network/system — call system_info FIRST (it includes battery, "
+        "storage, memory, network). Compute ALL arithmetic with run_python, never in your "
+        "head. On Termux, termux-api commands may also be available via teammates.\n"
+        "Never start long-running servers inside run_python (it blocks until timeout) — "
+        "write a small start script (bash) and report how to run it."
+    )
+
+
+class ResearcherAgent(BaseAgent):
+    role_key = "researcher"
+    agent_name = "researcher"
+    allowed_tools = READ_ONLY + WEB + ["write_file", "index_knowledge", "run_python"]
+    max_steps = 12
+    system_prompt = (
+        "You are the RESEARCH & DOCUMENT agent. Gather evidence from the web and local documents, "
+        "compare multiple sources, and produce sourced findings.\n"
+        "Method: search → fetch 2-4 promising pages → cross-check → synthesise.\n"
+        "Always cite URLs inline as [n] with a Sources list. Flag contradictions and unknowns; "
+        "never fabricate facts, dates, numbers or links. Save long reports to a .md file."
+    )
+
+
+class CoderAgent(BaseAgent):
+    role_key = "coder_repo"
+    agent_name = "coder"
+    allowed_tools = READ_ONLY + WRITE + EXEC + ["delete_path"]
+    max_steps = 14
+    system_prompt = (
+        "You are the CODING agent. You inspect, write and fix real code in the workspace.\n"
+        "Loop: explore (list_dir/read_file) → plan briefly → implement (write_file/edit_file) → "
+        "run it (run_shell/run_python) → read the error → fix → repeat until it actually works.\n"
+        "Rules:\n"
+        "- ALWAYS read a file before editing it.\n"
+        "- If research/design docs from earlier tasks exist, READ them and build exactly "
+        "what they specify.\n"
+        "- If you loaded a skill, its rules are MANDATORY — follow its checklist literally.\n"
+        "- Write complete, runnable code — no TODO stubs or '...' placeholders.\n"
+        "- Test what you write; a task is done only when execution succeeds.\n"
+        "- Keep changes minimal and focused; match the project's existing style.\n"
+        "- Prefer stdlib; install deps only when necessary (Termux may lack build tools).\n"
+        "- On Termux you can use termux-api commands (termux-battery-status, "
+        "termux-wifi-connectioninfo...) via run_shell for device data.\n"
+        "- Long-running servers: start them in background "
+        "('nohup python -m http.server 8080 >/dev/null 2>&1 &') then curl to verify — "
+        "a foreground server will block and time out."
+    )
+
+    def __init__(self, ctx, quick: bool = False):
+        super().__init__(ctx)
+        if quick:
+            self.role_key = "coder_quick"
+
+
+class CriticAgent(BaseAgent):
+    """Verification agent — checks other agents' work objectively with real evidence."""
+    role_key = "critic"
+    agent_name = "critic"
+    allowed_tools = READ_ONLY + ["run_shell", "run_python"]
+    max_steps = 6
+    use_skills = False
+    system_prompt = (
+        "You are the CRITIC / VERIFICATION agent. You are skeptical and evidence-driven.\n\n"
+        "YOU HAVE WORKING TOOLS — USE THEM. You can and must:\n"
+        "  • read_file / list_dir / find_files  → confirm the files really exist with real content\n"
+        "  • run_shell                          → run commands, tests, `python script.py`\n"
+        "  • run_python                         → execute code and check the output\n"
+        "Never claim you are 'unable to execute' or that you 'lack tool access' — you have it. "
+        "If a tool call errors, report THAT specific error as the issue.\n\n"
+        "Procedure (max 4 tool calls, be efficient):\n"
+        "1. Check the artifacts named in the result actually exist and contain what was claimed.\n"
+        "1b. If the task names exact files/paths (e.g. 'todo.py'), they must exist at that exact "
+        "location — INSIDE the active project folder when one is in effect (the verify prompt "
+        "names it), else the workspace root. Files hidden in OTHER unexpected subfolders or "
+        "doubled paths (e.g. 'workspace/workspace/...') => verdict 'partial' with an issue.\n"
+        "1c. If the task loaded a SKILL, verify the skill's checklist items are actually "
+        "present in the produced code/files (grep for :root, @media, :focus-visible, design "
+        "tokens, etc. as the skill demands). A frontend that ignores its design skill = "
+        "'partial' at best. Thin/lazy output (tiny CSS, no states, no responsiveness) "
+        "must FAIL, not pass.\n"
+        "2. If it is code, RUN it and compare the real output to the requirement.\n"
+        "3. Judge the acceptance criterion literally — nothing more, nothing less.\n\n"
+        "Be fair: the criterion is the bar, not your idea of perfection. Style preferences, "
+        "missing extras nobody asked for, and cosmetic nits are NOT failures.\n"
+        "Fail only for: missing/empty artifacts, code that errors, wrong results, "
+        "fabricated claims, or an unmet stated requirement.\n\n"
+        "Your FINAL message must be ONLY this JSON object, nothing before or after:\n"
+        '{"verdict":"pass","score":95,"issues":[],"missing":[],"fix_instructions":""}\n'
+        "verdict: pass | partial | fail — score 0-100 — fix_instructions: precise, actionable."
+    )
+
+    def verify(self, task_title: str, acceptance: str, output: str,
+               task_id: str = "global") -> Dict[str, Any]:
+        prompt = (f"TASK: {task_title}\n\nACCEPTANCE CRITERION: {acceptance}\n\n"
+                  f"AGENT'S CLAIMED RESULT:\n{output[:5000]}\n\n"
+                  "Verify it now using your tools (read the files, run the code), "
+                  "then reply with ONLY the JSON verdict.")
+        try:
+            pdir = str(self.ctx.state.get("project_dir", "") or "")
+        except Exception:
+            pdir = ""
+        if pdir:
+            prompt += (f"\n\nNOTE: project scope is ACTIVE for this goal — expected file "
+                       f"location is INSIDE {pdir}/ (not the workspace root). A file at "
+                       f"{pdir}/name.py counts as 'name.py at the exact expected location'. "
+                       "Do NOT demand root-level placement.")
+        res = self.run(prompt, task_id=task_id)
+        return self._parse(res.output, res)
+
+    def hard_verify(self, task_title: str, acceptance: str, output: str,
+                    task_id: str = "global") -> Dict[str, Any]:
+        """Escalate to the large model for a difficult final check (rate-limited)."""
+        prompt = (f"FINAL HARD VERIFICATION\nTASK: {task_title}\nACCEPTANCE: {acceptance}\n\n"
+                  f"RESULT:\n{output[:6000]}\n\nOutput only the JSON verdict.")
+        try:
+            raw = self.llm.ask("hard_fallback", prompt, system=self.system_prompt, task_id=task_id)
+            return self._parse(raw, None)
+        except Exception as e:  # noqa: BLE001
+            # verify hi nahi ho paya → 'fail'. Kabhi bhi 'partial' mat return karo:
+            # engine partial ko accept kar sakta hai aur unverified kaam 'done'
+            # ban jata tha (live bug #5).
+            return {"verdict": "fail", "score": 50,
+                    "issues": [f"hard verify unavailable: {e}"],
+                    "missing": [], "fix_instructions": ""}
+
+    @staticmethod
+    def _parse(text: str, res: Optional[AgentOutcome]) -> Dict[str, Any]:
+        text = text or ""
+        d = extract_json(text, ["verdict"])
+        if d and "verdict" in d:
+            v = str(d.get("verdict", "")).lower().strip()
+            if v not in ("pass", "fail", "partial"):
+                v = "partial"
+            try:
+                score = float(d.get("score", 70 if v == "pass" else 40))
+            except (TypeError, ValueError):
+                score = 70 if v == "pass" else 40
+            issues = d.get("issues") or []
+            if isinstance(issues, str):
+                issues = [issues]
+            missing = d.get("missing") or []
+            if isinstance(missing, str):
+                missing = [missing]
+            return {"verdict": v, "score": max(0.0, min(100.0, score)),
+                    "issues": [str(i)[:200] for i in issues][:6],
+                    "missing": [str(m)[:200] for m in missing][:6],
+                    "fix_instructions": str(d.get("fix_instructions", ""))[:600],
+                    "raw": text[:1200]}
+
+        # --- no JSON: infer from prose + tool evidence -------------------
+        field_v = (extract_field(text, "verdict") or "").lower()
+        low = text.lower()
+        if field_v in ("pass", "fail", "partial"):
+            v = field_v
+        elif re.search(r"\b(all (checks|criteria) (pass|met)|verified|works? correctly|"
+                       r"criterion (is )?met|looks correct)\b", low):
+            v = "pass"
+        elif re.search(r"\b(does not exist|missing|error|failed|incorrect|not met|"
+                       r"empty file|traceback)\b", low):
+            v = "fail"
+        else:
+            v = "partial"
+        # tool evidence: if the critic actually ran things successfully, lean positive
+        if res is not None:
+            tool_steps = [s for s in res.steps if s.kind == "tool"]
+            if tool_steps and all(s.ok for s in tool_steps) and v == "partial":
+                v = "pass"
+        try:
+            score = float(extract_field(text, "score") or (85 if v == "pass" else
+                                                           25 if v == "fail" else 55))
+        except (TypeError, ValueError):
+            score = 85 if v == "pass" else 55
+        return {"verdict": v, "score": score,
+                "issues": [] if v == "pass" else ["verdict inferred from prose (no JSON)"],
+                "missing": [], "fix_instructions": "", "raw": text[:1200]}
+
+
+AGENT_CLASSES = {
+    "router": RouterAgent,
+    "supervisor": SupervisorAgent,
+    "worker": WorkerAgent,
+    "researcher": ResearcherAgent,
+    "coder": CoderAgent,
+    "critic": CriticAgent,
+}

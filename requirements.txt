@@ -1,0 +1,12 @@
+# Core (required) — all pure-Python, install cleanly on Termux/ARM
+rich>=13.0.0
+PyYAML>=6.0
+
+# Recommended: fast vector math for RAG (Termux: pkg install python-numpy)
+numpy>=1.24
+
+# Optional: nicer REPL input (history, arrow keys)
+prompt_toolkit>=3.0.0
+
+# Optional extras the agent may install itself when a task needs them:
+#   requests, beautifulsoup4, lxml, pandas, matplotlib, fastapi, uvicorn

@@ -1,0 +1,21 @@
+# ── Secrets — KABHI commit na karo ──────────────────────────
+.env
+keys/
+*.key
+*api_key*
+.nexus/
+
+# ── Runtime data ────────────────────────────────────────────
+workspace/
+*.db
+*.sqlite*
+
+# ── Python ──────────────────────────────────────────────────
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# ── OS/Editor ───────────────────────────────────────────────
+.DS_Store
+Thumbs.db
