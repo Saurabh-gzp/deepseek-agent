@@ -30,7 +30,8 @@ ACTION_VERB = _re.compile(
     r"modify|update|rename|move|copy|fix|refactor|install|deploy|publish|send|"
     r"email|post|upload|download|scrape|crawl|automate|schedule|convert|"
     r"compress|migrate|save|"
-    r"store|record|todo)\b", _re.I)
+    r"store|record|todo|"
+    r"search|research|google|lookup|look\s*up|find|fetch)\b", _re.I)
 DIRECT_SAFE_INTENTS = {"chat", "question"}
 ACTION_CLAIM = _re.compile(
     r"\b(deleted|removed|created|wrote|built|saved|i\s?have|i've|done)\b", _re.I)
@@ -53,7 +54,8 @@ LIVE_Q = _re.compile(
 #  when the goal references it or has 3+ words.)
 GREETING_RE = _re.compile(
     r"^\s*(h+e+y+|hy+|hi+|hello+|yo+|sup|hola|"
-    r"hii+|good\s?(morning|afternoon|evening|night|night))\s*[!.,?]*\s*$", _re.I)
+    r"hii+|good\s?(morning|afternoon|evening|night))"
+    r"(\s+(bro|bhai|yaar|there|dude|mate))?\s*[!.,?]*\s*$", _re.I)
 FOLLOWUP_REF = _re.compile(
     r"\b(it|this|that|continue|"
     r"again|repeat|same|to)\b", _re.I)
@@ -120,6 +122,34 @@ def quick_math(goal: str) -> Optional[str]:
     return None
 
 
+def looks_like_noise(goal: str) -> bool:
+    """1–3 token garbage / typo / unknown token — not an action request.
+
+    Live: 'ilogy' was treated as an action → 4-task research + replan into
+    a leftover portfolio site. That must never happen.
+    """
+    g = (goal or "").strip()
+    if not g or len(g) > 40:
+        return False
+    words = g.split()
+    if len(words) > 3:
+        return False
+    if words[0].lower() in {
+        "search", "research", "google", "find", "fetch", "lookup",
+        "build", "make", "create", "write", "fix", "run",
+    }:
+        return False
+    if ACTION_VERB.search(g) or DEVICE_Q.search(g) or LIVE_Q.search(g):
+        return False
+    if MATH_HAS_OP.search(g) or IDENTITY_Q.search(g) or GREETING_RE.match(g):
+        return False
+    if SESSION_Q.search(g) or CHECK_FOLLOW.match(g) or DROP_THIS.search(g):
+        return False
+    if "/" in g or g.startswith("-") or any(w.endswith((".py", ".md", ".html")) for w in words):
+        return False
+    return True
+
+
 def router_guard(goal: str, decision: Dict[str, Any]) -> tuple:
     """Deterministic harness rule over the router LLM's decision.
 
@@ -130,6 +160,18 @@ def router_guard(goal: str, decision: Dict[str, Any]) -> tuple:
     d = dict(decision or {})
     intent = str(d.get("intent", "unclear")).lower()
     direct = str(d.get("direct_answer") or "").strip()
+    # Short unclear tokens are CHAT — never force a supervisor DAG.
+    if looks_like_noise(goal) and not ACTION_VERB.search(goal):
+        d["needs_orchestration"] = False
+        d["intent"] = "chat"
+        d["complexity"] = "trivial"
+        if not direct:
+            tok = goal.strip()
+            d["direct_answer"] = (
+                f"Not sure what **{tok}** means — typo, a search, or a project name? "
+                f"Say e.g. `search {tok}` or `build {tok}` if you want me to act."
+            )
+        return d, False
     unsafe = (intent not in DIRECT_SAFE_INTENTS
               or bool(ACTION_VERB.search(goal))
               or bool(DEVICE_Q.search(goal))          # device/system question
@@ -247,6 +289,19 @@ class Orchestrator:
                 if self.ctx.memory:
                     self.ctx.memory.add_message("assistant", reply, "nexus")
                 return report
+            if looks_like_noise(goal):
+                tok = goal.strip()
+                reply = (
+                    f"Not sure what **{tok}** means — typo, a search, or a project name? "
+                    f"Say e.g. `search {tok}` or `build {tok}` if you want me to act."
+                )
+                self.ui.phase("CHAT", "clarify")
+                report = RunReport(goal=goal, task_id=task_id,
+                                   final=reply, ok=True, verified=True,
+                                   elapsed=time.time() - t0)
+                if self.ctx.memory:
+                    self.ctx.memory.add_message("assistant", reply, "nexus")
+                return report
             if DROP_THIS.search(goal) and len(goal.split()) <= 12:
                 reply = self._drop_last_project()
                 self.ui.phase("CHAT", "drop last project")
@@ -348,7 +403,16 @@ class Orchestrator:
             report.replans += 1
             note = "\n".join(f"- {t.title}: {t.error or t.verdict}" for t in failed)
             self.ui.phase("REPLAN", f"{len(failed)} task(s) failed — attempt {report.replans}")
-            plan = self.supervisor.plan(goal, mem_ctx, failure_note=note)
+            # NEVER inject old session/RAG memory here — live: 'ilogy' replan
+            # became a portfolio website from leftover workspace docs.
+            if looks_like_noise(goal):
+                self.ui.event("warn", "short/unclear goal — stop instead of inventing a new project")
+                break
+            replan_ctx = (
+                f"USER GOAL (do not change, do not invent a different project): {goal}\n"
+                "If this goal is a single unknown word, ask the user — do NOT build a website."
+            )
+            plan = self.supervisor.plan(goal, replan_ctx, failure_note=note)
             report.plan = plan
             new_dag = TaskDAG.from_plan(plan)
             # carry over successful work as context
