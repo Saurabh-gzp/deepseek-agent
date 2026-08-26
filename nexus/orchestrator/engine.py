@@ -59,17 +59,26 @@ FOLLOWUP_REF = _re.compile(
     r"again|repeat|same|to)\b", _re.I)
 # Identity questions — instant deterministic answer (the LLM sometimes leaked ROUTER)
 IDENTITY_Q = _re.compile(
-    r"(your name|who are you|"
-    r"about yourself|introduce|"
-    r"what can you do)", _re.I)
+    r"(your name|who are you|about yourself|introduce|"
+    r"what can you do|how can you help|kaise help|"
+    r"kya kar sakte|kya kr skte|help kar|"
+    r"^help$|^help\b)", _re.I)
+SESSION_Q = _re.compile(
+    r"(kitne\s+session|how many session|list session|"
+    r"^sessions?\s*[?!.]*$|session (count|list))", _re.I)
+CHECK_FOLLOW = _re.compile(
+    r"^(check|dekho|dekh|verify|confirm)(\s+to)?(\s+kr[oe]?)?[\s?!.]*$", _re.I)
+DROP_THIS = _re.compile(
+    r"(chor|chhod|chodo|chhod do|ise delete|is ko delete|"
+    r"delete (this|it|ise)|leave this|drop this)", _re.I)
 NEXUS_INTRO = (
     "I'm **Nexus** — your personal autonomous agent, running right on this device.\n"
-    "- 💻 Write, fix, run and verify code\n"
-    "- 🔍 Web research + live info (weather, news, prices, anything)\n"
-    "- 📁 Build and manage projects\n"
-    "- ⚙️ Automation scripts, data analysis\n"
-    "- 🔋 Device checks (battery, storage, network)\n"
-    "- 🧠 Remember things (memory)\n\n"
+    "- Write, fix, run and verify code\n"
+    "- Web research + live info (weather, news, prices)\n"
+    "- Build and manage projects\n"
+    "- Automation scripts, data analysis\n"
+    "- Device checks (battery, storage, network)\n"
+    "- Remember things (memory)\n\n"
     "Just tell me what to do — I'll plan it and get it done.")
 GREETING_REPLIES = [
     "Hey! 😄 I'm Nexus — what are we working on today?",
@@ -84,7 +93,8 @@ MATH_HAS_OP = _re.compile(r"[\d)]\s*[+\-*/×÷^]\s*[\d(]")
 # v1.8.1: tasks that mention these concern hosting/verification — they need the
 # full coder (start_server etc.), never the cheap quick-coder path.
 _QUICK_BLOCK = _re.compile(
-    r"host|server|verify|verification|port\s*\d|http|localhost|deploy|live|curl|serve",
+    r"\b(host|hosting|http\.server|start_server|localhost|deploy|"
+    r"live (site|url)|curl\b)\b",
     _re.IGNORECASE)
 # v1.8.3: explicit hosting spec the supervisor writes into host-task descriptions
 _START_SERVER_SPEC = _re.compile(
@@ -219,6 +229,28 @@ class Orchestrator:
             if GREETING_RE.match(goal):
                 reply = _rnd.choice(GREETING_REPLIES)
                 self.ui.phase("CHAT", "hello! 👋")
+                report = RunReport(goal=goal, task_id=task_id,
+                                   final=reply, ok=True, verified=True,
+                                   elapsed=time.time() - t0)
+                if self.ctx.memory:
+                    self.ctx.memory.add_message("assistant", reply, "nexus")
+                return report
+            if SESSION_Q.search(goal.strip()) or (
+                    CHECK_FOLLOW.match(goal.strip())
+                    and self.ctx.state.get("last_meta") == "sessions"):
+                n, listing = self._session_listing()
+                reply = f"**{n} session(s)**\n{listing}" if listing else f"**{n} session(s)**"
+                self.ctx.state["last_meta"] = "sessions"
+                self.ui.phase("CHAT", "sessions")
+                report = RunReport(goal=goal, task_id=task_id,
+                                   final=reply, ok=True, verified=True,
+                                   elapsed=time.time() - t0)
+                if self.ctx.memory:
+                    self.ctx.memory.add_message("assistant", reply, "nexus")
+                return report
+            if DROP_THIS.search(goal) and len(goal.split()) <= 12:
+                reply = self._drop_last_project()
+                self.ui.phase("CHAT", "drop last project")
                 report = RunReport(goal=goal, task_id=task_id,
                                    final=reply, ok=True, verified=True,
                                    elapsed=time.time() - t0)
@@ -829,6 +861,7 @@ class Orchestrator:
             return
         pdir = slug if slug.startswith("projects/") else f"projects/{slug}"
         self.ctx.state["project_dir"] = pdir
+        self.ctx.state["last_project"] = pdir
         if hasattr(self.ctx.fs, "set_write_scope"):
             self.ctx.fs.set_write_scope(pdir)
         note = (f"\n\n[PROJECT FOLDER] All NEW files MUST be created inside "
@@ -853,6 +886,38 @@ class Orchestrator:
         for t in dag.order():
             lines.append(f"\n### [{t.status.value}] {t.title}\n{t.output[:1200]}")
         return "\n".join(lines)
+
+    def _session_listing(self) -> tuple:
+        mem = self.ctx.memory
+        if not mem:
+            return 0, ""
+        rows = []
+        try:
+            if hasattr(mem, "list_sessions"):
+                rows = mem.list_sessions() or []
+            elif hasattr(mem, "sessions"):
+                rows = mem.sessions() or []
+        except Exception:
+            rows = []
+        n = len(rows)
+        lines = []
+        for i, s in enumerate(rows[:20], 1):
+            if isinstance(s, dict):
+                lines.append(f"{i}. {s.get('id') or s.get('title') or s}")
+            else:
+                lines.append(f"{i}. {s}")
+        return n, "\n".join(lines)
+
+    def _drop_last_project(self) -> str:
+        pdir = str(self.ctx.state.get("last_project")
+                   or self.ctx.state.get("project_dir") or "").strip()
+        if not pdir:
+            return ("No current project in this chat to drop. "
+                    "Name the folder if you want a specific one deleted.")
+        self._clear_project_scope()
+        self.ctx.state.pop("last_project", None)
+        return (f"Dropped **{pdir}** from this session scope "
+                f"(files on disk were not deleted).")
 
     def cancel(self) -> None:
         self.cancelled = True

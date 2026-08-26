@@ -5,7 +5,7 @@
 
 app:
   name: "Nexus"
-  version: "1.8.8"
+  version: "1.8.9"
   workspace: "./workspace"          # agent ka sandbox / project directory
   data_dir: "./.nexus"              # db, vectors, logs, sessions
   theme: "cocoa"                    # cyber | mono | matrix
@@ -55,47 +55,47 @@ providers:
 # ----------------------------------------------------------
 # MODEL ROLES  (role -> model + fallback chain)
 # ----------------------------------------------------------
+# Roles use the STRONGEST model that still has usable org quota
+# (admin.mistral.ai 2026-08-26). 8 keys rotate on 429 — do NOT default
+# to 8B/3B when medium-2508 has 356k tok/min vs medium-latest 25k.
 models:
   supervisor:
-    model: mistral-medium-latest
-    fallback: [mistral-small-2603, ministral-8b-2512]
+    model: mistral-medium-2508
+    fallback: [mistral-medium-latest, mistral-small-2603]
     temperature: 0.3
     max_tokens: 4096
   router:
-    # Capability decider: ministral-8b understands intent + model capability mapping
-    model: ministral-8b-2512
-    fallback: [ministral-3b-2512]
+    model: mistral-small-2603
+    fallback: [mistral-medium-2508]
     temperature: 0.0
     max_tokens: 1024
   worker:
-    model: ministral-8b-2512
-    fallback: [ministral-14b-2512, mistral-small-2603]
+    model: mistral-small-2603
+    fallback: [mistral-medium-2508, ministral-14b-2512]
     temperature: 0.4
     max_tokens: 4096
   researcher:
     model: mistral-small-2603
-    fallback: [ministral-8b-2512]
+    fallback: [mistral-medium-2508]
     temperature: 0.3
     max_tokens: 8192
   coder_quick:
     model: codestral-2508
-    fallback: [devstral-2512, mistral-small-2603]
+    fallback: [devstral-2512, mistral-medium-2508]
     temperature: 0.2
     max_tokens: 8192
   coder_repo:
     model: devstral-2512
-    fallback: [codestral-2508, mistral-medium-latest]
+    fallback: [codestral-2508, mistral-medium-2508]
     temperature: 0.2
     max_tokens: 8192
   critic:
-    model: mistral-medium-latest
+    model: mistral-medium-2508
     fallback: [mistral-small-2603]
     temperature: 0.1
     max_tokens: 4096
   hard_fallback:
-    # mistral-large-2512 currently hangs (>180s) on many org keys — medium-2604
-    # is the newest generation and responds in <1s; large stays as final fallback.
-    model: mistral-medium-2604
+    model: mistral-medium-2508
     fallback: [mistral-large-2512, mistral-medium-latest]
     temperature: 0.2
     max_tokens: 8192
@@ -133,9 +133,12 @@ rate_limits:
   ministral-8b-2512: 3.0
   ministral-14b-2512: 0.45
   mistral-small-2603: 0.75
-  mistral-medium-latest: 0.38
-  mistral-medium-2508: 0.5
+  mistral-medium-latest: 0.32
+  mistral-medium-2505: 0.40
+  mistral-medium-2508: 0.36
   mistral-medium-2604: 0.5
+  voxtral-mini-2602: 1.4
+  voxtral-small-2507: 0.95
   codestral-2508: 2.0
   devstral-2512: 0.8
   mistral-large-2512: 0.065

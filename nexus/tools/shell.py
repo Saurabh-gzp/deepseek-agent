@@ -402,11 +402,12 @@ class ShellTools:
         probe("termux-api cmds", "ls $PREFIX/bin 2>/dev/null | grep '^termux-' | tr '\\n' ' ' | head -c 300")
         return out
 
-    def start_server(self, command: str, port: int = 8000, path: str = "/",
+    def start_server(self, command: str = "", port: int = 8000, path: str = "/",
                      marker: str = "", name: str = "", wait: int = 6,
                      **kwargs) -> ToolResult:
         # LLMs sometimes pass fuzzy params (timeout=, wait_seconds=, cwd=...) —
         # tolerate and map them instead of erroring the whole tool call.
+        directory = ""
         if kwargs:
             if "timeout" in kwargs or "wait_seconds" in kwargs or "delay" in kwargs:
                 try:
@@ -421,6 +422,22 @@ class ShellTools:
                     pass
             if "url_path" in kwargs:
                 path = kwargs["url_path"]
+            directory = str(kwargs.get("directory") or kwargs.get("dir")
+                            or kwargs.get("cwd") or "")
+        # Live Termux: start_server(path='projects/foo') glued onto the port
+        # as `http.server 8000projects`. Treat a non-URL `path` as a folder.
+        pth = str(path or "/")
+        if pth and not pth.startswith("/") and ("/" in pth or pth.startswith("projects")):
+            directory = directory or pth
+            path = "/"
+        cmd0 = (command or "").strip()
+        if cmd0 and not re.search(r"\s", cmd0) and (
+                cmd0.startswith("projects") or (self.root / cmd0).is_dir()):
+            directory = directory or cmd0
+            command = ""
+        if not (command or "").strip():
+            drel = directory or "."
+            command = f"python3 -m http.server {int(port) or 8000} --directory {drel}"
         """Sutra-style ONE-SHOT hosting: start a server DETACHED (survives this
         tool call), wait for the port, fetch the URL with stdlib, and verify real
         content markers — all in one call. The agent never claims 'hosted'
@@ -536,7 +553,7 @@ class ShellTools:
                     "command": {"type": "string"}, "port": {"type": "integer"},
                     "path": {"type": "string"}, "marker": {"type": "string"},
                     "name": {"type": "string"}, "wait": {"type": "integer"}},
-                 "required": ["command"]},
+                 "required": []},
                 self.start_server, Risk.EXECUTE,
                 agents=["supervisor", "coder", "worker", "solo"])
         reg.add("device_info",
