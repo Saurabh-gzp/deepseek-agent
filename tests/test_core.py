@@ -1187,6 +1187,8 @@ class TestWorkspaceCleanFixes:
                 self.calls += 1
                 raise AssertionError("LLM must not be called when cancelled")
         ag.llm = _R()
+        ag.config = {}
+        ag.max_steps = 10
         ag.tool_specs = lambda: []
         ag.build_system = lambda *a, **k: "sys"
         out = ag.run("do something")
