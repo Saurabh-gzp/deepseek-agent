@@ -226,10 +226,10 @@ class KeyRing:
 
         for name in env_names or []:
             _add(os.getenv(name))
-        # PROVIDER_API_KEY_1..9 convention
+        # PROVIDER_API_KEY_1..20 convention (multi-key pools: 10+ keys in one run)
         base = f"{provider.upper()}_API_KEY"
         _add(os.getenv(base))
-        for i in range(1, 10):
+        for i in range(1, 21):
             _add(os.getenv(f"{base}_{i}"))
         # comma separated bulk
         bulk = os.getenv(f"{base}S")

@@ -23,6 +23,24 @@ from nexus.tools.shell import ShellTools                   # noqa: E402
 
 # ======================= KeyRing / failover =========================
 class TestKeyRing:
+
+    def test_discover_many_numbered_keys(self):
+        """v1.8.1: 10+ keys — MISTRAL_API_KEY_1.._10 must all be discovered
+        (user runs a 10-key pool to absorb 429 storms)."""
+        import os
+        names = []
+        for i in range(1, 11):
+            n = f"MISTRAL_API_KEY_{i}"
+            os.environ[n] = f"k{i}"
+            names.append(n)
+        try:
+            keys = KeyRing.discover("mistral", ["MISTRAL_API_KEY"], None)
+            assert len(keys) == 10, keys
+            assert "k10" in keys
+        finally:
+            for n in names:
+                os.environ.pop(n, None)
+
     def test_discover_and_rotate(self):
         ring = KeyRing("test", ["k1", "k2", "k3"])
         assert len(ring) == 3

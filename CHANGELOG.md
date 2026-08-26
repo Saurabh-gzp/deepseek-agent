@@ -1,6 +1,15 @@
 # Changelog
 
+## [1.8.1] — multi-key pools: run 10+ Mistral keys in one job
+
+`KeyRing.discover` now scans `MISTRAL_API_KEY_1.._20` (earlier: .._9) and still
+supports the bulk form `MISTRAL_APIS="key1,key2,..."`. A 10-key pool absorbs the
+429 storms seen in the live TUI run (dozens of `rate-limited -> cooling` events);
+the ring rotates per call (`max_key_rotations_per_call`), cools a key 4s after a
+429 and waits for the soonest healthy key instead of failing.
+
 ## [1.8.0] — hosting is EXECUTED, never a guide; the run never ends unhosted
+ — hosting is EXECUTED, never a guide; the run never ends unhosted
 
 **Trigger (live A/B):** the user's own TUI run ended with the agent writing a
 `hosting_guide.md` and claiming "site is live at localhost:8000" — it had only
