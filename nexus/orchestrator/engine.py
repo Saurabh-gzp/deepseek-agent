@@ -326,6 +326,11 @@ class Orchestrator:
         plan = self.supervisor.plan(goal, plan_ctx)
         report.plan = plan
         dag = TaskDAG.from_plan(plan)
+        if dag.dangling():
+            self.ui.event("warn", "dangling DAG deps — rebuilding fallback plan")
+            plan = self.supervisor._fallback_plan(goal, "dangling dependencies")
+            report.plan = plan
+            dag = TaskDAG.from_plan(plan)
         self._apply_project_scope(goal, plan, dag)
         self._reinforce_assignment(dag)     # v1.6: harness-level capability fix
         self.ui.show_plan(plan, dag)
@@ -409,8 +414,11 @@ class Orchestrator:
             final = f"⚠️ Output withheld: {reason}"
             report.final = final
         done_n = len(dag.done())
-        report.ok = done_n > 0 and not dag.failed()
-        report.verified = all(t.score >= 60 for t in dag.done()) if dag.done() else False
+        report.ok = (done_n > 0 and not dag.failed()
+                     and all((t.verdict or "pass") == "pass" for t in dag.done()))
+        report.verified = (bool(dag.done()) and not dag.failed()
+                           and all((t.verdict or "pass") == "pass" and t.score >= 60
+                                   for t in dag.done()))
         # hosting-required run with zero real start_server evidence is never 'verified'
         if self._goal_needs_host(goal, dag) and not self._server_evidence:
             report.verified = False
@@ -624,12 +632,13 @@ class Orchestrator:
             if self.cancelled:
                 task.status = TaskStatus.SKIPPED
                 return
-            if attempt > 0 and time.time() - t_task > task_budget:
-                self.ui.event("warn", f"{task.id}: time budget spent — accepting current result")
-                task.status = TaskStatus.DONE if task.output else TaskStatus.FAILED
-                task.error = task.error or "task time budget exceeded"
-                task.score = max(task.score, 50.0)
-                return
+                if attempt > 0 and time.time() - t_task > task_budget:
+                    self.ui.event("warn", f"{task.id}: time budget spent — not marking done")
+                    task.status = TaskStatus.FAILED
+                    task.error = task.error or "task time budget exceeded"
+                    task.score = max(task.score, 50.0)
+                    task.verdict = task.verdict or "fail"
+                    return
             task.attempts = attempt + 1
             # v1.8.1: the quick (cheap) coder must never handle hosting/verification
             # — live TUI run: host task (short desc) went to codestral-2508 which
@@ -848,7 +857,7 @@ class Orchestrator:
         slug = (gm.group(1).strip().lower() if gm else
                 str(plan.get("project") or "").strip().lower().replace(" ", "-"))
         creates = any(t.agent in ("worker", "coder") for t in dag.order())
-        if not slug and creates and ACTION_VERB.search(goal):
+        if not slug and creates and self.CREATE_Y.search(goal):
             words = [w for w in _re.sub(r"[^a-z0-9\s]", " ", goal.lower()).split()
                      if w not in {"a", "an", "the", "me", "my", "for", "with",
                                   "and", "to", "of", "use", "it", "using",
