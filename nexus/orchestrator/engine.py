@@ -82,12 +82,6 @@ NEXUS_INTRO = (
     "- Device checks (battery, storage, network)\n"
     "- Remember things (memory)\n\n"
     "Just tell me what to do — I'll plan it and get it done.")
-GREETING_REPLIES = [
-    "Hey! 😄 I'm Nexus — what are we working on today?",
-    "Hi! Nexus here 💪 Code, research, files, automation — what do you need?",
-    "Hello! How's it going? Give me a task and watch it get done.",
-    "Yo! Ready when you are — drop a task and let's go ⚡",
-]
 
 # Calculator-style math never goes through the LLM — deterministic Python.
 MATH_EXPR = _re.compile(r"^[\s\d+\-*/×÷%^().,]+$")
@@ -160,24 +154,19 @@ def router_guard(goal: str, decision: Dict[str, Any]) -> tuple:
     d = dict(decision or {})
     intent = str(d.get("intent", "unclear")).lower()
     direct = str(d.get("direct_answer") or "").strip()
-    # Short unclear tokens are CHAT — never force a supervisor DAG.
+    # Casual / short / unclear with no action verb: NEVER force a DAG.
+    # Do not invent a canned "not sure what X means" — the router LLM replies.
     if looks_like_noise(goal) and not ACTION_VERB.search(goal):
         d["needs_orchestration"] = False
         d["intent"] = "chat"
         d["complexity"] = "trivial"
-        if not direct:
-            tok = goal.strip()
-            d["direct_answer"] = (
-                f"Not sure what **{tok}** means — typo, a search, or a project name? "
-                f"Say e.g. `search {tok}` or `build {tok}` if you want me to act."
-            )
         return d, False
     unsafe = (intent not in DIRECT_SAFE_INTENTS
               or bool(ACTION_VERB.search(goal))
-              or bool(DEVICE_Q.search(goal))          # device/system question
-              or bool(LIVE_Q.search(goal))            # live info — needs web
+              or bool(DEVICE_Q.search(goal))
+              or bool(LIVE_Q.search(goal))
               or bool(ACTION_CLAIM.search(direct))
-              or bool(MATH_HAS_OP.search(goal)))      # arithmetic — the LLM gets it wrong
+              or bool(MATH_HAS_OP.search(goal)))
     if unsafe and (direct or not d.get("needs_orchestration")):
         d["needs_orchestration"] = True
         d["direct_answer"] = ""
@@ -258,44 +247,12 @@ class Orchestrator:
 
         # ---- fast path 0: greeting / identity — instant, deterministic,
         #      always in the user's own script, zero LLM calls
-        import random as _rnd
         if not force_orchestration:
-            if (IDENTITY_Q.search(goal) and len(goal.split()) <= 12
-                    and not ACTION_VERB.search(goal)):
-                self.ui.phase("CHAT", "hello! 👋")
-                report = RunReport(goal=goal, task_id=task_id,
-                                   final=NEXUS_INTRO, ok=True, verified=True,
-                                   elapsed=time.time() - t0)
-                if self.ctx.memory:
-                    self.ctx.memory.add_message("assistant", NEXUS_INTRO, "nexus")
-                return report
-            if GREETING_RE.match(goal):
-                reply = _rnd.choice(GREETING_REPLIES)
-                self.ui.phase("CHAT", "hello! 👋")
-                report = RunReport(goal=goal, task_id=task_id,
-                                   final=reply, ok=True, verified=True,
-                                   elapsed=time.time() - t0)
-                if self.ctx.memory:
-                    self.ctx.memory.add_message("assistant", reply, "nexus")
-                return report
             if SESSION_Q.search(goal.strip()) or CHECK_FOLLOW.match(goal.strip()):
                 n, listing = self._session_listing()
                 reply = f"**{n} session(s)**\n{listing}" if listing else f"**{n} session(s)**"
                 self.ctx.state["last_meta"] = "sessions"
                 self.ui.phase("CHAT", "sessions")
-                report = RunReport(goal=goal, task_id=task_id,
-                                   final=reply, ok=True, verified=True,
-                                   elapsed=time.time() - t0)
-                if self.ctx.memory:
-                    self.ctx.memory.add_message("assistant", reply, "nexus")
-                return report
-            if looks_like_noise(goal):
-                tok = goal.strip()
-                reply = (
-                    f"Not sure what **{tok}** means — typo, a search, or a project name? "
-                    f"Say e.g. `search {tok}` or `build {tok}` if you want me to act."
-                )
-                self.ui.phase("CHAT", "clarify")
                 report = RunReport(goal=goal, task_id=task_id,
                                    final=reply, ok=True, verified=True,
                                    elapsed=time.time() - t0)
@@ -349,9 +306,10 @@ class Orchestrator:
                           "(action requests cannot be answered without doing them)")
         self.ui.route_info(decision)
 
-        if (not force_orchestration and not decision.get("needs_orchestration")
-                and decision.get("direct_answer")):
-            answer = decision["direct_answer"]
+        if not force_orchestration and not decision.get("needs_orchestration"):
+            answer = str(decision.get("direct_answer") or "").strip()
+            if not answer:
+                answer = self._live_chat(goal)
             report.final, report.ok, report.verified = answer, True, True
             report.elapsed = time.time() - t0
             report.tokens = self.ctx.llm.stats.snapshot().get("total_tokens", 0) - tok0
@@ -708,7 +666,7 @@ class Orchestrator:
             # v1.8.1: the quick (cheap) coder must never handle hosting/verification
             # — live TUI run: host task (short desc) went to codestral-2508 which
             # returned an EMPTY response (0 tool calls), burning an attempt+critic round.
-            quick = (agent_name == "coder" and attempt == 0
+            quick = (agent_name == "coder" and attempt == 0)
                      and len(task.description) < 400
                      and not _QUICK_BLOCK.search(task.description))
             agent = self.agent_for(agent_name, quick=quick)
@@ -1019,6 +977,20 @@ class Orchestrator:
             (d / f"{task_id}.json").write_text(_json.dumps(payload)[:200000], encoding="utf-8")
         except Exception:
             pass
+
+    def _live_chat(self, goal: str) -> str:
+        """Real Nexus reply — no canned templates."""
+        sys = (
+            "You are Nexus, a personal autonomous agent on the user's device. "
+            "This is casual chat or slang. Reply as a smart friend. "
+            "Match the user's language and script (Roman Hindi stays Roman). "
+            "1-3 short lines. Never mention router/supervisor/tools/pipeline. "
+            "Never use the phrase 'typo, a search, or a project name'."
+        )
+        try:
+            return (self.ctx.llm.ask("router", goal, system=sys) or "").strip()
+        except Exception:
+            return ""
 
     def cancel(self) -> None:
         self.cancelled = True
