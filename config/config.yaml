@@ -157,7 +157,7 @@ autonomy:
   max_steps_per_agent: 12
   max_retries: 2
   task_timeout_seconds: 180
-  overall_timeout_seconds: 900
+  overall_timeout_seconds: 1500
   large_model_calls_per_task: 1
   max_devstral_parallel: 2
   auto_continue: true            # agent bina puche next step chalata rahe

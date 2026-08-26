@@ -59,10 +59,10 @@ FOLLOWUP_REF = _re.compile(
     r"again|repeat|same|to)\b", _re.I)
 # Identity questions — instant deterministic answer (the LLM sometimes leaked ROUTER)
 IDENTITY_Q = _re.compile(
-    r"(your name|who are you|about yourself|introduce|"
-    r"what can you do|how can you help|kaise help|"
-    r"kya kar sakte|kya kr skte|help kar|"
-    r"^help$|^help\b)", _re.I)
+    r"^(help|kaise help( karo?)?|how can you help( me)?|"
+    r"what can you do|who are you|about yourself|"
+    r"introduce( yourself)?|kya (kar|kr) sakte|kya kr skte|"
+    r"help karo?)[\s?!.]*$", _re.I)
 SESSION_Q = _re.compile(
     r"(kitne\s+session|how many session|list session|"
     r"^sessions?\s*[?!.]*$|session (count|list))", _re.I)
@@ -235,9 +235,7 @@ class Orchestrator:
                 if self.ctx.memory:
                     self.ctx.memory.add_message("assistant", reply, "nexus")
                 return report
-            if SESSION_Q.search(goal.strip()) or (
-                    CHECK_FOLLOW.match(goal.strip())
-                    and self.ctx.state.get("last_meta") == "sessions"):
+            if SESSION_Q.search(goal.strip()) or CHECK_FOLLOW.match(goal.strip()):
                 n, listing = self._session_listing()
                 reply = f"**{n} session(s)**\n{listing}" if listing else f"**{n} session(s)**"
                 self.ctx.state["last_meta"] = "sessions"
@@ -862,6 +860,11 @@ class Orchestrator:
         pdir = slug if slug.startswith("projects/") else f"projects/{slug}"
         self.ctx.state["project_dir"] = pdir
         self.ctx.state["last_project"] = pdir
+        try:
+            if self.ctx.memory:
+                self.ctx.memory.remember("preference", "last_project", pdir, 0.8)
+        except Exception:
+            pass
         if hasattr(self.ctx.fs, "set_write_scope"):
             self.ctx.fs.set_write_scope(pdir)
         note = (f"\n\n[PROJECT FOLDER] All NEW files MUST be created inside "
@@ -893,17 +896,21 @@ class Orchestrator:
             return 0, ""
         rows = []
         try:
-            if hasattr(mem, "list_sessions"):
-                rows = mem.list_sessions() or []
-            elif hasattr(mem, "sessions"):
-                rows = mem.sessions() or []
+            rows = mem.list_sessions(50) or []
         except Exception:
             rows = []
         n = len(rows)
+        try:
+            n = int((mem.stats() or {}).get("sessions") or n)
+        except Exception:
+            pass
         lines = []
-        for i, s in enumerate(rows[:20], 1):
+        for i, s in enumerate(rows[:50], 1):
             if isinstance(s, dict):
-                lines.append(f"{i}. {s.get('id') or s.get('title') or s}")
+                goal = (s.get("goal") or s.get("title") or "")[:50]
+                sid = str(s.get("id") or "")[:10]
+                msgs = s.get("msgs", "")
+                lines.append(f"{i}. {sid}  msgs={msgs}  {goal}")
             else:
                 lines.append(f"{i}. {s}")
         return n, "\n".join(lines)
@@ -911,6 +918,14 @@ class Orchestrator:
     def _drop_last_project(self) -> str:
         pdir = str(self.ctx.state.get("last_project")
                    or self.ctx.state.get("project_dir") or "").strip()
+        if not pdir and self.ctx.memory:
+            try:
+                for f in self.ctx.memory.recall("preference", 8):
+                    if f.get("key") == "last_project" and f.get("value"):
+                        pdir = str(f["value"]).strip()
+                        break
+            except Exception:
+                pass
         if not pdir:
             return ("No current project in this chat to drop. "
                     "Name the folder if you want a specific one deleted.")
