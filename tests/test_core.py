@@ -1148,3 +1148,25 @@ class TestWorkspaceCleanFixes:
         from nexus.agents.specialists import WorkerAgent
         assert "delete_path" in WorkerAgent.allowed_tools
         assert "run_shell" in WorkerAgent.allowed_tools
+
+    def test_sessions_numbered_and_resume_by_ref(self, tmp_path):
+        """/sessions numbers + /resume by number, id, prefix, bare=latest."""
+        from nexus.memory.store import MemoryStore
+        ms = MemoryStore(tmp_path / "m.db")
+        s1 = ms.start_session(goal="build a calculator")
+        for _ in range(3):
+            ms.add_message("user", "x")
+        ms.session_id = None
+        s2 = ms.start_session(goal="research weather apis")
+        # number resolution follows /sessions order (updated DESC)
+        assert ms.resolve_session("1") == s2          # newest first
+        assert ms.resolve_session("2") == s1
+        # id and prefix
+        assert ms.resolve_session(s1) == s1
+        assert ms.resolve_session(s1[:6]) == s1
+        assert ms.resolve_session("99") is None
+        assert ms.resolve_session("zzz") is None
+        assert ms.latest_session() == s2
+        # resume works with the resolved id
+        assert ms.resume_session(ms.resolve_session("2")) is True
+        assert ms.session_id == s1

@@ -111,3 +111,14 @@ Pattern: **what failed + why + the exact fix command.** Never "Error occurred".
 ❌ Walls of prose · ❌ documenting the code line by line · ❌ untested commands ·
 ❌ "TODO: write this section" shipped · ❌ marketing tone in technical docs ·
 ❌ screenshots for text that could be copy-pasted
+
+
+## Status updates — the 3P format
+*(inspired by Anthropic's internal-comms Agent Skill, Apache-2.0)*
+
+For progress/status reports use three sections, each with concrete bullets:
+- **Progress** — shipped since last update (files/features/numbers, not adjectives)
+- **Plans** — what happens next, with owners/order
+- **Problems** — blockers with the specific help needed
+
+One page maximum. Lead with the most important line, not the backstory.

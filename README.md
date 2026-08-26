@@ -179,7 +179,6 @@ skills/
 ├── web_development/frontend_ui_ux_design.md
 ├── web_development/backend_api_development.md
 ├── automation/webautomation/web_automation.md
-├── automation/make_automation_script/web_automation.md
 ├── coding/python_project_structure.md
 ├── coding/debugging_and_testing.md
 ├── research/deep_research.md

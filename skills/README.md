@@ -19,9 +19,7 @@ skills/
 │   ├── frontend_ui_ux_design.md
 │   └── backend_api_development.md
 ├── automation/
-│   ├── webautomation/
-│   │   └── web_automation.md
-│   └── make_automation_script/
+│   └── webautomation/
 │       └── web_automation.md
 ├── coding/
 │   ├── python_project_structure.md

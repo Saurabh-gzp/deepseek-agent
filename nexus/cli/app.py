@@ -28,7 +28,7 @@ HELP = """
   [accent]/memory[/]               memory stats + stored facts
   [accent]/remember k=v[/]         save a preference
   [accent]/sessions[/]             list past sessions
-  [accent]/resume <id>[/]          resume a session
+  [accent]/resume <n|id>[/]        resume a session (number or id; bare /resume = latest)
   [accent]/tools[/]                list available tools
   [accent]/projects[/]             list project folders in workspace
   [accent]/plan <goal>[/]          plan only, do not execute
@@ -574,17 +574,41 @@ class NexusApp:
     def cmd_sessions(self, _: str = "") -> None:
         if not self.ctx.memory:
             return
-        rows = [[s["id"], time.strftime("%m-%d %H:%M", time.localtime(s["created"])),
-                 s["msgs"], (s["goal"] or s["title"])[:44]]
-                for s in self.ctx.memory.list_sessions(15)]
-        self.ui.table("SESSIONS", ["id", "when", "msgs", "goal"], rows,
-                      ["accent", "muted", "muted", "white"])
+        sessions = self.ctx.memory.list_sessions(15)
+        if not sessions:
+            self.ui.print("  [muted]no sessions yet[/]")
+            return
+        rows = [[str(i + 1), s["id"][:10],
+                 time.strftime("%m-%d %H:%M", time.localtime(s["created"])),
+                 str(s["msgs"]), (s["goal"] or s["title"])[:44]]
+                for i, s in enumerate(sessions)]
+        self.ui.table("SESSIONS  (/resume <number or id>)",
+                      ["#", "id", "when", "msgs", "goal"], rows,
+                      ["accent", "muted", "muted", "muted", "white"])
 
     def cmd_resume(self, arg: str) -> None:
-        if self.ctx.memory and self.ctx.memory.resume_session(arg.strip()):
-            self.ui.event("ok", f"resumed session {arg}")
+        if not self.ctx.memory:
+            return
+        ref = arg.strip()
+        if not ref:
+            # bare /resume → resume the most recent session
+            ref = self.ctx.memory.latest_session() or ""
+            if not ref:
+                self.ui.event("error", "no sessions to resume yet")
+                return
+            sid = ref
         else:
-            self.ui.event("error", "session not found")
+            sid = self.ctx.memory.resolve_session(ref)
+        if sid and self.ctx.memory.resume_session(sid):
+            goal = ""
+            for s in self.ctx.memory.list_sessions(50):
+                if s["id"] == sid:
+                    goal = (s["goal"] or s["title"])[:60]
+                    break
+            self.ui.event("ok", f"resumed {sid[:10]} — {goal}")
+        else:
+            self.ui.event("error", f"session not found: {ref!r} "
+                          "(see /sessions for numbers and ids)")
 
     def cmd_tools(self, _: str = "") -> None:
         rows = [[t.name, t.risk.value, ("all" if "*" in t.agents else ",".join(t.agents))[:28],

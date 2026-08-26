@@ -66,6 +66,30 @@ class MemoryStore:
             return True
         return False
 
+    def resolve_session(self, ref: str) -> Optional[str]:
+        """Resolve a session by NUMBER (as shown in /sessions), by id, or by
+        id-prefix. Returns the session id, or None if not found."""
+        ref = (ref or "").strip()
+        if not ref:
+            return None
+        if ref.isdigit():
+            n = int(ref)
+            if n < 1:
+                return None
+            rows = self.list_sessions(n)          # same order as /sessions
+            if n <= len(rows):
+                return rows[n - 1]["id"]
+            return None
+        # exact id
+        if self.conn.execute("SELECT id FROM sessions WHERE id=?",
+                             (ref,)).fetchone():
+            return ref
+        # id prefix (e.g. "/resume debf")
+        row = self.conn.execute(
+            "SELECT id FROM sessions WHERE id LIKE ? ORDER BY updated DESC LIMIT 1",
+            (ref + "%",)).fetchone()
+        return row["id"] if row else None
+
     def latest_session(self) -> Optional[str]:
         row = self.conn.execute("SELECT id FROM sessions ORDER BY updated DESC LIMIT 1").fetchone()
         return row["id"] if row else None

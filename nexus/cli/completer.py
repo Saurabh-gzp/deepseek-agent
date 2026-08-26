@@ -37,7 +37,7 @@ COMMANDS: Dict[str, str] = {
     "/memory": "memory stats + facts",
     "/remember": "save a preference (k=v)",
     "/sessions": "list past sessions",
-    "/resume": "resume a session",
+    "/resume": "resume a session (number or id)",
     "/tools": "tools and which agent gets what",
     "/projects": "project folders in the workspace",
     "/plan": "plan only, no execution",

@@ -23,7 +23,31 @@ Is there a public/JSON API or an XHR endpoint the page calls?
 **Always look for the API first.** Open DevTools → Network → XHR, reload, and copy the
 request. On the CLI: `curl -s URL | grep -o 'https://[^"]*api[^"]*' | sort -u`.
 
-## Tier 1 — requests + BeautifulSoup (default)
+## Testing local web apps — lifecycle + reconnaissance
+*(pattern adapted from Anthropic's webapp-testing Agent Skill, Apache-2.0)*
+
+**Server lifecycle:** never block the agent on a foreground server. Start it in
+the background, wait for the port, run checks, then kill it:
+
+```bash
+cd app && nohup python -m http.server 8080 >/dev/null 2>&1 &
+for i in $(seq 1 20); do curl -s localhost:8080 >/dev/null && break; sleep 0.5; done
+curl -s localhost:8080 | head -40          # smoke test
+kill %1 2>/dev/null
+```
+
+**Reconnaissance-then-action** (for dynamic pages, browser or no browser):
+1. Fetch the page and WAIT for everything to settle (Playwright: `networkidle`)
+2. Screenshot / dump the DOM first — do not guess selectors
+3. Identify selectors from the RENDERED state, not the source template
+4. Only then execute the action with the discovered selectors
+
+**Static vs dynamic decision:**
+- Static HTML? Read the file directly — selectors are right there.
+- Dynamic? Find the XHR/fetch endpoint the page calls and hit THAT with
+  requests (95% faster than a browser). Browser only as a last resort.
+
+
 ```python
 import requests
 from bs4 import BeautifulSoup

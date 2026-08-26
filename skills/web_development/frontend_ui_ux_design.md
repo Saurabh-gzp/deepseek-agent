@@ -2,7 +2,7 @@
 name: Frontend UI/UX Design
 description: Build modern, responsive, accessible web UIs — layout systems, design tokens, component patterns, dark mode, animation and performance. Use when creating or improving any HTML/CSS/JS/React frontend, landing page, dashboard or web app interface.
 tags: [frontend, ui, ux, css, html, react, responsive, accessibility, design]
-version: 1.0
+version: 2.0
 agents: ["coder", "worker", "supervisor"]
 ---
 
@@ -99,6 +99,46 @@ Only animate `transform` and `opacity`. Durations: 150ms (micro) / 250ms (panel)
 - System font stack unless brand demands otherwise:
   `font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif`
 - No framework for a static page; no jQuery ever
+
+## Design direction — think like a design lead
+*(adapted from Anthropic's public frontend-design Agent Skill, Apache-2.0 — thank you!)*
+
+Approach every UI as the design lead of a small studio known for visual identities
+that could not be mistaken for anyone else's. The client has rejected templated
+proposals before: make deliberate, opinionated choices about palette, typography
+and layout that are specific to THIS brief, and take one real aesthetic risk you
+can justify.
+
+**Anti-template calibration** — AI-generated design currently clusters around three
+looks: (1) warm cream background (#F4F1EA-ish) + high-contrast serif + terracotta
+accent; (2) near-black background + one acid-green/vermilion accent; (3) broadsheet
+layout with hairline rules and zero border-radius. All three are legitimate when
+the brief asks for them — but they must be CHOSEN, not defaulted to.
+
+**Ground it in the subject.** If the brief doesn't pin down the subject, pin it
+yourself: name one concrete subject, its audience, and the page's single job.
+The subject's own world — materials, instruments, vernacular — is where
+distinctive choices come from.
+
+**Two-pass process:**
+1. Brainstorm a compact token plan BEFORE writing code:
+   - **Palette** — 4–6 named hex values
+   - **Type** — 2+ roles (a characterful display face used with restraint, a
+     complementary body face, an optional utility face for captions/data)
+   - **Layout** — a one-sentence concept + a quick ASCII wireframe
+   - **Signature** — the single element this page will be remembered by
+2. Critique the plan: if any part reads like the generic default you would
+   produce for ANY similar page, revise that part and say what changed.
+   Only then write the code — and derive every color/type decision from the plan.
+
+**Restraint.** Spend your boldness in ONE place (the signature element); keep
+everything around it quiet and disciplined. Cut decoration that doesn't serve
+the brief. The quality gates below are the floor, not the ceiling.
+
+**Words are design material.** Name things by what the user controls
+("Save changes", not "Submit"). Active voice, plain verbs, same action name
+through the whole flow. Errors explain what went wrong and how to fix it —
+never vague, never apologetic. An empty screen is an invitation to act.
 
 ## Accessibility quick audit
 ```
