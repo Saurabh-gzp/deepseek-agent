@@ -128,9 +128,20 @@ def main() -> int:
                       "then write analyze.py that prints the densest planet, and run it.")
     dur = time.time() - t0
     ws = cfg.workspace
+
+    def artifact(name: str) -> bool:
+        """v1.2+ project isolation: build artifacts live in projects/<slug>/, so
+        accept the file at the workspace root OR inside any project folder."""
+        if (ws / name).exists():
+            return True
+        proj = ws / "projects"
+        if proj.is_dir():
+            return any((p / name).exists() for p in proj.iterdir() if p.is_dir())
+        return False
+
     check("run completed", bool(rep.final), f"{dur:.0f}s")
-    check("planets.csv created", (ws / "planets.csv").exists())
-    check("analyze.py created", (ws / "analyze.py").exists())
+    check("planets.csv created", artifact("planets.csv"))
+    check("analyze.py created", artifact("analyze.py"))
     check("tasks verified", rep.verified or rep.ok, f"replans={rep.replans}")
 
     # --- 10. safety
@@ -146,7 +157,7 @@ def main() -> int:
     print(f"\n\033[96m━━━ {len(PASS)} passed, {len(FAIL)} failed ━━━\033[0m")
     if FAIL:
         print("\033[91mFailed: " + ", ".join(FAIL) + "\033[0m")
-    s = llm.stats.snapshot()
+    s = ctx.llm.stats.snapshot()
     print(f"tokens used: {s['total_tokens']} · calls: {s['calls']} · errors: {s['errors']}")
     return 1 if FAIL else 0
 

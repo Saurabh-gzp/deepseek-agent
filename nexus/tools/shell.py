@@ -68,6 +68,15 @@ class ShellTools:
         return None
 
     def run_shell(self, command: str, cwd: str = ".", timeout: int = 0) -> ToolResult:
+        """NEVER raises. Any exception (bad cwd, unicode, OSError, ...) is
+        converted into a ToolResult error so the agent loop keeps running."""
+        try:
+            return self._run_shell(command, cwd, timeout)
+        except Exception as e:  # noqa: BLE001
+            return ToolResult(False, error=(
+                f"run_shell internal error ({type(e).__name__}): {e}"))
+
+    def _run_shell(self, command: str, cwd: str = ".", timeout: int = 0) -> ToolResult:
         # ---- deletion choke-point: rm/shred/find -delete etc. hard-blocked
         if SHELL_DELETE.search(command):
             return ToolResult(False, error="BLOCKED: this command deletes files. " + DELETE_GUIDE)
@@ -104,6 +113,14 @@ class ShellTools:
             return ToolResult(False, error=str(e))
 
     def run_python(self, code: str, timeout: int = 0) -> ToolResult:
+        """NEVER raises. Any exception becomes a ToolResult error."""
+        try:
+            return self._run_python(code, timeout)
+        except Exception as e:  # noqa: BLE001
+            return ToolResult(False, error=(
+                f"run_python internal error ({type(e).__name__}): {e}"))
+
+    def _run_python(self, code: str, timeout: int = 0) -> ToolResult:
         """Run python snippet in a temp file inside the workspace."""
         # ---- deletion choke-point: os.remove/unlink/rmtree/os.system/
         #      subprocess waghera se file deletion = hard block
@@ -160,6 +177,80 @@ class ShellTools:
             info.append(f"{tool:9}: {'yes' if p.returncode == 0 else 'no'}")
         info += self._device_probes()
         return ToolResult(True, output="\n".join(info))
+
+    def device_info(self, detail: str = "storage,battery,network,memory") -> ToolResult:
+        """One-shot, CORRECT device report — no command guessing.
+
+        v1.5: replaces the old behaviour where the coder agent guessed Termux
+        paths like `/sdcard/*` (which do NOT exist in Termux) and burned
+        minutes + hundreds of tokens on failing `du -sh` runs. This tool uses
+        the canonical Termux paths (`~/storage/*`, `/data/data/...`) and only
+        reports a command's error, never retries blind variants.
+        """
+        import platform
+        want = {p.strip().lower() for p in str(detail).split(",") if p.strip()}
+        want = want or {"storage", "battery", "network", "memory"}
+        out: List[str] = [
+            f"platform : {platform.platform()}",
+            f"python   : {platform.python_version()}",
+            f"environment: {'TERMUX (Android)' if self.is_termux else 'generic Linux (not Termux)'}",
+            "note: on generic Linux there is no /data or /storage/emulated — "
+            "the real mounts below ARE the complete answer.",
+        ]
+
+        def run(label: str, cmd: str, t: int = 20) -> None:
+            try:
+                p = subprocess.run(cmd, shell=True, capture_output=True, text=True,
+                                   timeout=t, env={**os.environ, "LC_ALL": "C"})
+                txt = (p.stdout or "").strip()
+                err = (p.stderr or "").strip()
+                if txt:
+                    out.append(f"{label}:\n{txt}")
+                elif err:
+                    out.append(f"{label}: (error: {err[:160]})")
+            except subprocess.TimeoutExpired:
+                out.append(f"{label}: (timed out after {t}s)")
+            except Exception as e:  # noqa: BLE001
+                out.append(f"{label}: ({e})")
+
+        # ---- STORAGE (Termux-correct paths only) -------------------------
+        if "storage" in want:
+            # user-visible storage: /data (app home) + /storage/emulated (sdcard)
+            run("storage_partitions",
+                "df -h /data /storage/emulated/0 2>/dev/null | sed -n '1,6p'; "
+                "df -h . | sed -n '1,5p'", 15)
+            # Termux home top-level (fast, always allowed)
+            run("termux_home_top",
+                "du -sh ~/* 2>/dev/null | sort -rh | head -12", 25)
+            # shared storage symlinks (~/storage/downloads, ~/storage/shared ...)
+            run("shared_storage_top",
+                "for d in ~/storage/*/; do [ -d \"$d\" ] && du -sh \"$d\" 2>/dev/null; done | sort -rh | head -12", 40)
+            run("sdcard_free",
+                "df -h /storage/emulated/0 /data 2>/dev/null | awk 'NR>1{print $NF\": \"used\" $(NF-3) \" of \" $(NF-4) \" free\" $(NF-2)}' | head -3", 10)
+
+        # ---- BATTERY ------------------------------------------------------
+        if "battery" in want:
+            run("battery", "termux-battery-status 2>/dev/null || "
+                "cat /sys/class/power_supply/battery/capacity 2>/dev/null", 10)
+
+        # ---- NETWORK ------------------------------------------------------
+        if "network" in want:
+            run("network_ip", "ip -4 addr show 2>/dev/null | grep 'inet ' | grep -v '127.0.0.1' | "
+                              "awk '{print $2, $NF}' | head -5", 10)
+            run("network_route", "ip route 2>/dev/null | grep default | head -2", 10)
+
+        # ---- MEMORY / CPU / UPTIME ----------------------------------------
+        if "memory" in want:
+            run("memory", "free -m 2>/dev/null | sed -n '1,2p' || cat /proc/meminfo | head -3", 10)
+        run("cpu_uptime", "uptime 2>/dev/null || cat /proc/loadavg", 10)
+
+        # ---- ANDROID identity (Termux only) -------------------------------
+        if self.is_termux:
+            o = subprocess.run("getprop ro.product.model 2>/dev/null; getprop ro.build.version.release 2>/dev/null",
+                               shell=True, capture_output=True, text=True, timeout=8)
+            if o.stdout.strip():
+                out.append("android: " + " / ".join(x for x in o.stdout.splitlines() if x.strip()))
+        return ToolResult(True, output="\n".join(out))
 
     def _device_probes(self) -> List[str]:
         """Battery/storage/memory/network — Termux termux-api + Linux /sys fallbacks.
@@ -219,3 +310,10 @@ class ShellTools:
                 self.install_package, Risk.EXECUTE, agents=["coder", "supervisor", "solo"])
         reg.add("system_info", "Show OS/python/tool availability of the host device.",
                 {"type": "object", "properties": {}}, self.system_info, Risk.READ_ONLY)
+        reg.add("device_info",
+                "One-shot, CORRECT device report: storage (Termux paths), battery, network, "
+                "memory, cpu. Use for ANY device/system question (storage, battery, wifi). "
+                "Never guess shell paths yourself — this tool knows the right ones.",
+                {"type": "object", "properties": {"detail": S}},
+                self.device_info, Risk.READ_ONLY,
+                agents=["supervisor", "coder", "worker", "researcher", "critic", "solo"])

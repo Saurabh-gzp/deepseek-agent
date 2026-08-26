@@ -195,6 +195,18 @@ class TestShell:
     def test_timeout(self, sh):
         assert not sh.run_shell("sleep 5", timeout=1).ok
 
+    def test_never_raises_on_garbage(self, sh):
+        """v1.5: run_shell/run_python must convert ANY exception into a
+        ToolResult error — the agent loop can never be killed by a tool bug."""
+        for fn in (lambda: sh.run_shell("\xff\xfe \x00"),
+                   lambda: sh.run_shell("echo hi", cwd=12345),
+                   lambda: sh.run_shell("sleep 0.1", timeout="abc"),
+                   lambda: sh.run_python(None),
+                   lambda: sh.run_python(b"print(1)"),
+                   lambda: sh.install_package("")):
+            r = fn()                      # must NOT raise
+            assert hasattr(r, "ok") and isinstance(r.ok, bool)
+
 
 # ========================= Tool registry ============================
 class TestToolRegistry:

@@ -43,6 +43,8 @@ class RouterAgent(BaseAgent):
         '  "needs_orchestration": true|false,\n'
         '  "suggested_agents": ["researcher"|"worker"|"coder"|"critic"],\n'
         '  "direct_answer": "answer text ONLY if trivial chat/greeting/simple fact, else empty",\n'
+        '  "task_type": "device|web|code|data|general",\n'
+        '  "model_hint": "which MODEL class fits best: coder|researcher|worker|supervisor",\n'
         '  "estimated_subtasks": 1-8,\n'
         '  "priority": "low|normal|high",\n'
         '  "duplicate_of_recent": true|false,\n'
@@ -61,7 +63,16 @@ class RouterAgent(BaseAgent):
         "needs_orchestration=true and suggested_agents=[\"worker\",\"coder\"].\n"
         "LIVE INFO (weather, news, scores, prices — anything 'current/latest/today') — "
         "you have NO live data: set needs_orchestration=true with suggested_agents "
-        "[\"researcher\"]. NEVER deflect users to other websites/apps.\n\n"
+        "[\"researcher\"]. NEVER deflect users to other websites/apps.\n"
+        "MODEL ROUTING (you are the 8B capability decider):\n"
+        "  * device/system questions (storage, battery, wifi, memory, phone) => task_type=device, "
+        "model_hint=worker, suggested_agents=[\"worker\"] — the system has a device_info tool "
+        "that knows the correct commands.\n"
+        "  * code/bug-fix/website/UI requests => task_type=code, model_hint=coder, "
+        "suggested_agents=[\"coder\"]\n"
+        "  * live info / research => task_type=web, model_hint=researcher, "
+        "suggested_agents=[\"researcher\"]\n"
+        "  * the supervisor still plans in detail; your hints steer the plan.\n\n"
         "WHEN you fill direct_answer, you are speaking AS 'Nexus', the user's personal agent:\n"
         "* Reply in the EXACT SAME language AND script the user used. User writes Roman "
         "If the user writes in another language, reply in that language "
@@ -94,6 +105,8 @@ class RouterAgent(BaseAgent):
             d.setdefault("needs_orchestration", True)
             d.setdefault("suggested_agents", ["worker"])
             d.setdefault("direct_answer", "")
+            d.setdefault("task_type", "general")
+            d.setdefault("model_hint", "")
             d.setdefault("reason", "")
             return d
         return self._fallback(request, "unparseable router output")
@@ -156,6 +169,7 @@ class SupervisorAgent(BaseAgent):
         '    {"id":"t1","title":"short imperative title",\n'
         '     "description":"precise instructions incl. filenames/commands the agent must use",\n'
         '     "agent":"researcher|worker|coder|critic",\n'
+        '     "model":"OPTIONAL exact model for THIS task (e.g. codestral-2508), else empty",\n'
         '     "depends_on":[],\n'
         '     "skill":"optional skill_id from the catalog",\n'
         '     "acceptance":"objective, checkable success criterion",\n'
@@ -163,11 +177,29 @@ class SupervisorAgent(BaseAgent):
         "  ],\n"
         '  "final_deliverable": "what the user receives at the end"\n'
         "}\n"
+        "MODEL CAPABILITY TABLE — assign every task to the agent whose MODEL best fits it:\n"
+        "- coder = codestral-2508 (quick/small edits) / devstral-2512 (repo-scale work): "
+        "writing or FIXING code, debugging, running builds/tests, WEBSITE CODING + UI/UX "
+        "implementation, any \"bug fix\" request. codestral for small/single-file edits; "
+        "devstral for multi-file/repository tasks.\n"
+        "- researcher = mistral-small-2603: web research, live info (weather, news, prices), "
+        "documents, citations.\n"
+        "- worker = ministral-8b-2512 (or ministral-14b-2512 when extra reasoning helps): "
+        "data shaping, summaries, formatting, comparisons, DEVICE/SYSTEM queries, simple file ops.\n"
+        "- critic = mistral-medium-latest: verification ONLY, and only if the goal explicitly "
+        "demands verification.\n"
         "Rules:\n"
         "- 2 to 8 tasks. Fewer, meatier tasks beat many tiny ones.\n"
         "- Tasks writing to the SAME file must NOT be parallel_safe together; use depends_on.\n"
-        "- agent=coder for writing/fixing code; researcher for web/doc gathering; "
-        "worker for summarising, formatting, data shaping; critic only for final verification.\n"
+        "- CODE + BUG FIXES → coder. WEBSITE CODING / UI DESIGN → coder (frontend skill). "
+        "Generic shell-only or data work → worker, NEVER coder.\n"
+        "- DEVICE/SYSTEM queries (storage, battery, wifi, memory, phone info): exactly ONE "
+        "worker task that calls `device_info` + `system_info` and summarises the returned data. "
+        "Do NOT plan command experiments, do NOT use coder, do NOT invent shell paths — "
+        "Termux has no /sdcard; correct paths are ~/storage/* and /data/data/com.termux/...\n"
+        "- LIVE info (weather/news/prices/scores) → researcher with web_search, never coder.\n"
+        "- Set \"model\" only when one exact model must run that task (e.g. codestral-2508 for a "
+        "small code task); otherwise leave it empty and the role chain decides.\n"
         "- Every task needs an objective acceptance criterion (file exists, tests pass, etc.).\n"
         "- Reference a skill_id when a matching playbook exists."
     )
@@ -201,6 +233,15 @@ class SupervisorAgent(BaseAgent):
             return self._fallback_plan(goal, "no valid JSON in plan output")
         return self._sanitize(plan, goal)
 
+    # Only these models may be pinned per-task by the supervisor; anything
+    # else is dropped so a stray LLM answer can never inject an unknown model.
+    PINNABLE_MODELS = {
+        "codestral-2508", "devstral-2512",
+        "mistral-small-2603", "mistral-medium-latest",
+        "mistral-medium-2508", "mistral-medium-2604",
+        "ministral-8b-2512", "ministral-14b-2512", "ministral-3b-2512",
+    }
+
     def _sanitize(self, plan: Dict[str, Any], goal: str) -> Dict[str, Any]:
         tasks = plan.get("tasks") or []
         valid_agents = {"researcher", "worker", "coder", "critic"}
@@ -213,11 +254,13 @@ class SupervisorAgent(BaseAgent):
                 tid += "x"
             ids.add(tid)
             agent = str(t.get("agent", "worker")).lower()
+            model = str(t.get("model") or "").strip().lower()
             clean.append({
                 "id": tid,
                 "title": str(t.get("title") or f"Task {i + 1}")[:120],
                 "description": str(t.get("description") or t.get("title") or goal),
                 "agent": agent if agent in valid_agents else "worker",
+                "model": model if model in self.PINNABLE_MODELS else "",
                 "depends_on": [d for d in (t.get("depends_on") or []) if isinstance(d, str)],
                 "skill": t.get("skill") or "",
                 "acceptance": str(t.get("acceptance") or "Task output is complete and correct"),
@@ -283,9 +326,15 @@ class WorkerAgent(BaseAgent):
         "permission in your text output, do NOT use rm/shred in run_shell (hard-blocked) — "
         "just call delete_path for every file/folder and report the results.\n"
         "DEVICE QUESTIONS: you run on the user's device. NEVER say you cannot check "
-        "battery/storage/network/system — call system_info FIRST (it includes battery, "
-        "storage, memory, network). Compute ALL arithmetic with run_python, never in your "
-        "head. On Termux, termux-api commands may also be available via teammates.\n"
+        "battery/storage/network/system — and NEVER guess shell commands. Call "
+        "device_info(detail='storage,battery,network,memory') FIRST — it knows the "
+        "correct Termux paths. Rule: if you are not 100% sure a command/path exists on "
+        "Termux, do NOT run it blind; use device_info or search the web for the exact "
+        "command instead of firing failed guesses (failed guesses cost the user real "
+        "time and tokens — one failing `du -sh /sdcard/*` run was 26s of nothing). "
+        "Termux has no /sdcard: correct paths are ~/storage/* and "
+        "/data/data/com.termux/files/home/*. Compute ALL arithmetic with run_python, "
+        "never in your head.\n"
         "Never start long-running servers inside run_python (it blocks until timeout) — "
         "write a small start script (bash) and report how to run it."
     )
@@ -363,6 +412,10 @@ class CriticAgent(BaseAgent):
         "'replace with actual', or ellipsis-instead-of-real-output for a command that "
         "WAS run (or should have been), the verdict is FAIL — invented numbers are "
         "worse than an honest failure.\n"
+        "TOOL-FAILURE CHECK: if the prompt lists tool-call failures from the task, "
+        "the verdict cannot be 'pass' unless you yourself re-verified the affected data "
+        "with a working tool call; failed commands that were retried successfully and "
+        "produce complete data may still score high but expect the task to be partial.\n"
         "DEVICE-REPORT CHECK: for storage/device summaries, verify the conclusion "
         "matches the CORRECT rows — /data and /storage/emulated are user storage; "
         "/dev/block/dm-*, /system, /vendor rows are read-only system partitions "
@@ -391,11 +444,18 @@ class CriticAgent(BaseAgent):
     )
 
     def verify(self, task_title: str, acceptance: str, output: str,
-               task_id: str = "global") -> Dict[str, Any]:
+               task_id: str = "global",
+               tool_failures: Optional[List[str]] = None) -> Dict[str, Any]:
         prompt = (f"TASK: {task_title}\n\nACCEPTANCE CRITERION: {acceptance}\n\n"
-                  f"AGENT'S CLAIMED RESULT:\n{output[:5000]}\n\n"
-                  "Verify it now using your tools (read the files, run the code), "
-                  "then reply with ONLY the JSON verdict.")
+                  f"AGENT'S CLAIMED RESULT:\n{output[:5000]}")
+        if tool_failures:
+            prompt += ("\n\nTOOL-CALL FAILURES DURING THE TASK (real errors, not optional):\n"
+                       + "\n".join(f"- {f}" for f in tool_failures[:8])
+                       + "\nIF ANY FAILURE COULD AFFECT THE RESULT, the verdict is 'partial' "
+                         "at best — the result cannot be 'pass' unless you independently "
+                         "confirmed the affected data with your own working tool call.")
+        prompt += ("\n\nVerify it now using your tools (read the files, run the code), "
+                   "then reply with ONLY the JSON verdict.")
         try:
             pdir = str(self.ctx.state.get("project_dir", "") or "")
         except Exception:

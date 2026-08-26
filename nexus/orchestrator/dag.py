@@ -23,6 +23,7 @@ class Task:
     title: str
     description: str
     agent: str = "worker"
+    model: str = ""              # v1.5: capability-pinned model ("" = role chain decides)
     depends_on: List[str] = field(default_factory=list)
     skill: str = ""
     acceptance: str = ""
@@ -66,6 +67,7 @@ class TaskDAG:
             dag.add(Task(
                 id=t["id"], title=t.get("title", t["id"]),
                 description=t.get("description", ""), agent=t.get("agent", "worker"),
+                model=str(t.get("model") or ""),
                 depends_on=list(t.get("depends_on", [])), skill=t.get("skill", ""),
                 acceptance=t.get("acceptance", ""),
                 parallel_safe=bool(t.get("parallel_safe", True)),

@@ -15,13 +15,15 @@ import subprocess
 import sys
 import termios
 import time
+from pathlib import Path
 
 try:
     import pyte
 except ImportError:          # optional dev dependency (real-terminal testing)
     pyte = None
 
-ROOT = "/home/user/nexus-agent"ART = os.path.join(ROOT, ".nexus", "tui_artifacts")
+ROOT = str(Path(__file__).resolve().parent.parent)   # repo root (was hardcoded)
+ART = os.path.join(ROOT, ".nexus", "tui_artifacts")
 PROMPT = "nexus ❯"          # rendered prompt marker
 ALLOW = "Allow?"             # approval prompt marker
 

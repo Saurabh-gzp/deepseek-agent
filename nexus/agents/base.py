@@ -114,7 +114,7 @@ class BaseAgent:
 
     def run(self, task: str, context: str = "", max_steps: int = 0,
             on_step: Optional[Callable[[AgentStep], None]] = None,
-            task_id: str = "global") -> AgentOutcome:
+            task_id: str = "global", model: Optional[str] = None) -> AgentOutcome:
         t0 = time.time()
         budget = max_steps or min(self.max_steps,
                                   int(self.config.get("autonomy.max_steps_per_agent", 12)))
@@ -141,7 +141,8 @@ class BaseAgent:
                                     steps, tokens, model_used, time.time() - t0,
                                     error=f"timeout after {timeout}s")
             try:
-                res = self.llm.chat(self.role_key, messages, tools=specs or None, task_id=task_id)
+                res = self.llm.chat(self.role_key, messages, tools=specs or None,
+                                    task_id=task_id, model=model)
             except Exception as e:  # noqa: BLE001
                 err = str(e)[:300]
                 steps.append(AgentStep(i, "error", err, ok=False))
@@ -207,7 +208,7 @@ class BaseAgent:
                          "Step budget reached. Give your final answer now with what you achieved, "
                          "what is incomplete, and next steps. No tool calls."})
         try:
-            final = self.llm.chat(self.role_key, messages, task_id=task_id)
+            final = self.llm.chat(self.role_key, messages, task_id=task_id, model=model)
             tokens += final.total_tokens
             steps.append(AgentStep(budget, "answer", final.content))
             return AgentOutcome(self.agent_name, True, final.content, steps, tokens,

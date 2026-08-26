@@ -68,10 +68,21 @@ class MemoryStore:
 
     def resolve_session(self, ref: str) -> Optional[str]:
         """Resolve a session by NUMBER (as shown in /sessions), by id, or by
-        id-prefix. Returns the session id, or None if not found."""
+        id-prefix. Returns the session id, or None if not found.
+
+        Fix (v1.5): session ids are UUID hex — a prefix can be ALL DIGITS
+        (e.g. '123456'), which `isdigit()` used to misread as a session number
+        and return None. Exact id is checked FIRST, then the number path,
+        and an out-of-range number falls through to prefix matching.
+        """
         ref = (ref or "").strip()
         if not ref:
             return None
+        # 1) exact id first (a 12-char hex id may be all digits)
+        if self.conn.execute("SELECT id FROM sessions WHERE id=?",
+                             (ref,)).fetchone():
+            return ref
+        # 2) number (as shown by /sessions, newest first)
         if ref.isdigit():
             n = int(ref)
             if n < 1:
@@ -79,12 +90,8 @@ class MemoryStore:
             rows = self.list_sessions(n)          # same order as /sessions
             if n <= len(rows):
                 return rows[n - 1]["id"]
-            return None
-        # exact id
-        if self.conn.execute("SELECT id FROM sessions WHERE id=?",
-                             (ref,)).fetchone():
-            return ref
-        # id prefix (e.g. "/resume debf")
+            # out-of-range number → fall through to prefix matching below
+        # 3) id prefix (e.g. "/resume debf")
         row = self.conn.execute(
             "SELECT id FROM sessions WHERE id LIKE ? ORDER BY updated DESC LIMIT 1",
             (ref + "%",)).fetchone()

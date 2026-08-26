@@ -254,10 +254,16 @@ class UI:
         t.add_column("#", style="muted", width=3)
         t.add_column("task", style="white", overflow="fold")
         t.add_column("agent", style="agent", width=11)
+        t.add_column("model", style="accent", width=20)
         t.add_column("deps", style="muted", width=8)
         for i, task in enumerate(dag.order(), 1):
+            model = getattr(task, "model", "") or ""
+            if not model:
+                model = {"coder": "codestral/devstral", "researcher": "mistral-small",
+                         "worker": "ministral-8b", "critic": "mistral-medium"}.get(task.agent, "auto")
             t.add_row(str(i), task.title[:46],
                       f"{AGENT_ICON.get(task.agent, '•')} {task.agent}",
+                      model,
                       ",".join(task.depends_on) or "—")
         body = Group(
             Text(plan.get("strategy", "")[:300], style="muted"),

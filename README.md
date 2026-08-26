@@ -159,22 +159,37 @@ PLAN → DAG → ASSIGN → RUN SAFE TASKS IN PARALLEL → COLLECT
      → VERIFY → failed? REPLAN/RETRY → success? SAVE MEMORY → RESPOND
 ```
 
-### Model roles
+### Model roles (v1.5 — capability-aware)
 | Role | Model | Job |
 |---|---|---|
-| router | `ministral-3b-2512` | classification, triage, trivial answers |
-| supervisor | `mistral-medium-latest` | planning, coordination, synthesis |
-| worker | `ministral-8b-2512` | general execution (×3 parallel) |
-| researcher | `mistral-small-2603` | web research, documents, citations |
-| coder (quick) | `codestral-2508` | small code generation |
-| coder (repo) | `devstral-2512` | full repository tasks |
-| critic | `mistral-medium-latest` | verification, scoring |
-| hard fallback | `mistral-large-2512` | difficult final checks (rate-limited to 1/task) |
+| router (decider) | `ministral-8b-2512` | intent classification + capability routing (task_type / model_hint), trivial answers |
+| supervisor | `mistral-medium-latest` | planning, coordination, synthesis, per-task model pinning |
+| worker | `ministral-8b-2512` | general execution, data shaping, device queries |
+| worker (deep) | `ministral-14b-2512` | worker fallback — extra reasoning when needed |
+| researcher | `mistral-small-2603` | web research, live info (weather/news/prices), citations |
+| coder (quick) | `codestral-2508` | small/single-file code edits, quick scripts |
+| coder (repo) | `devstral-2512` | full repository tasks, bug fixes, website/UI implementation |
+| critic | `mistral-medium-latest` | verification, scoring (tool-failure aware) |
+| hard fallback | `mistral-medium-2604` | difficult final checks (rate-limited to 1/task) |
 | memory / RAG | `mistral-embed-2312` | embeddings |
 | documents | `mistral-ocr-latest` | PDF/image extraction |
 | safety | `mistral-moderation-2603` | input/output moderation |
 
-Every role has a fallback chain — see `config/config.yaml`.
+Every role has a fallback chain — see `config/config.yaml`. The supervisor can
+also pin an exact model per task (validated whitelist); the plan table shows it.
+
+> **Why router is 8B now:** the 3B router used to misroute (claiming actions it
+> could not perform, answering device questions with "no access"). The 8B
+> decider understands intent AND model capability mapping, so plans are
+> assigned by capability: code/bug-fixes → coder models, web/live → researcher,
+> device queries → worker + `device_info`.
+>
+> **Rate limits in `config.yaml` now match the real org limits**
+> (admin.mistral.ai → Limits): embed 1.0 rps, small 0.83, 8B 3.13, 3B 12.5,
+> codestral 2.08, devstral 0.83, large 0.07, medium ~0.38–0.5.
+> Verified live on 2026-08-26: 56 models exist; `mistral-large-2512` hangs on
+> some org keys (>180s → demoted to 2nd fallback); `labs-leanstral-1-5-1` and
+> `glm-5-2` return 403 (org not enabled).
 
 ---
 
@@ -272,6 +287,26 @@ large_model_calls_per_task: 1
 ```
 
 ---
+
+## What's new in v1.5.0 — capability-aware autonomy
+
+- **8B capability decider** — router now classifies intent AND which model class
+  should do the work (`task_type` + `model_hint`); the supervisor's DAG follows.
+- **Per-task model pinning** — the plan can name the exact model
+  (`codestral-2508` for a quick script, `devstral-2512` for a repo task);
+  the frontend plan shows agent + model, backend keeps the detail.
+- **`device_info` tool** — one-shot correct Termux device report (storage via
+  `~/storage/*`, battery, network, memory). "storage info" went from
+  **251 s / 144,732 tokens / 5 failed `du -sh /sdcard/*` runs** to
+  **~85 s / ~16 k tokens / 0 failed runs** (measured live).
+- **Critic is tool-failure aware** — a task whose tool calls errored can no
+  longer be certified 100-pass; it is capped at partial (≤79) unless the critic
+  re-verifies the data itself (live bug: 5 failed runs still scored 100.0).
+- **run_shell / run_python never raise** — every exception becomes a
+  `ToolResult` error; the agent loop cannot be killed by a tool bug.
+- **Bug fixes:** all-digit session-id prefix `/resume` (was ~3.7% of sessions),
+  `test_tui_session.py` SyntaxError + hardcoded ROOT, `test_live.py` stale
+  project-isolation paths. Tests: 134 offline + 26/26 live.
 
 ## What's new in v1.4.2 — "workspace clean" fix + full tool audit
 

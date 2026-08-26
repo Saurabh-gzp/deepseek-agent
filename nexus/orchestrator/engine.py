@@ -271,6 +271,14 @@ class Orchestrator:
             if prefs:
                 plan_ctx = "### User preferences\n" + "\n".join(
                     f"- {p['key']}: {p['value']}" for p in prefs)
+        # Router hint → planner steer: the 8B decider says WHAT class of work this
+        # is; the supervisor turns that into tasks with capability-fit models.
+        if decision.get("task_type") in ("device", "web", "code") or decision.get("model_hint"):
+            plan_ctx += ("\n\n### Router classification (authoritative)\n"
+                         f"- task_type: {decision.get('task_type', 'general')}\n"
+                         f"- model_hint: {decision.get('model_hint', '')}\n"
+                         "- Assign tasks to the agent class that matches model_hint, "
+                         "following the MODEL CAPABILITY TABLE below.")
         plan = self.supervisor.plan(goal, plan_ctx)
         report.plan = plan
         dag = TaskDAG.from_plan(plan)
@@ -395,7 +403,8 @@ class Orchestrator:
 
             outcome: AgentOutcome = agent.run(
                 f"{task.title}\n\n{task.description}", context,
-                on_step=lambda s, tt=task: self.ui.task_step(tt, s), task_id=task_id)
+                on_step=lambda s, tt=task: self.ui.task_step(tt, s), task_id=task_id,
+                model=task.model or None)
             task.steps += len(outcome.steps)
             task.tokens += outcome.tokens
             task.output = outcome.output or task.output
@@ -412,8 +421,20 @@ class Orchestrator:
             # ---- VERIFY
             if self._should_verify(task):
                 self.ui.phase("VERIFY", f"critic checking {task.id}", quiet=True)
+                failed_ops = [f"{s.tool}: {s.content[:120]}" for s in outcome.steps
+                              if s.kind == "tool" and not s.ok]
                 verdict = self.critic.verify(task.title, task.acceptance or "Task completed correctly",
-                                             task.output, task_id=task_id)
+                                             task.output, task_id=task_id,
+                                             tool_failures=failed_ops)
+                # Deterministic insurance: a task whose tool calls ERRORS can never be
+                # certified 100-pass out of the box — the critic must justify it.
+                # (Live bug: storage task with 5 failed `du` runs still scored 100.0)
+                if failed_ops and verdict.get("verdict") == "pass":
+                    verdict["verdict"] = "partial"
+                    verdict["score"] = min(float(verdict.get("score", 70)), 79.0)
+                    verdict.setdefault("issues", []).insert(
+                        0, f"{len(failed_ops)} tool call(s) failed during the task; "
+                           f"verify the data is complete despite them: {failed_ops[0][:80]}")
                 task.score = float(verdict.get("score", 0))
                 task.verdict = verdict.get("verdict", "")
                 self.ui.verdict(task, verdict)

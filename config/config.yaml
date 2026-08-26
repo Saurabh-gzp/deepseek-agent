@@ -5,7 +5,7 @@
 
 app:
   name: "Nexus"
-  version: "1.4.2"
+  version: "1.5.0"
   workspace: "./workspace"          # agent ka sandbox / project directory
   data_dir: "./.nexus"              # db, vectors, logs, sessions
   theme: "cocoa"                    # cyber | mono | matrix
@@ -62,13 +62,14 @@ models:
     temperature: 0.3
     max_tokens: 4096
   router:
-    model: ministral-3b-2512
-    fallback: [ministral-8b-2512]
+    # Capability decider: ministral-8b understands intent + model capability mapping
+    model: ministral-8b-2512
+    fallback: [ministral-3b-2512]
     temperature: 0.0
     max_tokens: 1024
   worker:
     model: ministral-8b-2512
-    fallback: [ministral-3b-2512, mistral-small-2603]
+    fallback: [ministral-14b-2512, mistral-small-2603]
     temperature: 0.4
     max_tokens: 4096
   researcher:
@@ -92,8 +93,10 @@ models:
     temperature: 0.1
     max_tokens: 4096
   hard_fallback:
-    model: mistral-large-2512
-    fallback: [mistral-medium-latest]
+    # mistral-large-2512 currently hangs (>180s) on many org keys — medium-2604
+    # is the newest generation and responds in <1s; large stays as final fallback.
+    model: mistral-medium-2604
+    fallback: [mistral-large-2512, mistral-medium-latest]
     temperature: 0.2
     max_tokens: 8192
   embed:
@@ -111,19 +114,34 @@ models:
 
 # ----------------------------------------------------------
 # RATE LIMITS  (requests per second per model)
+# Matched to the ACTUAL organization limits (admin.mistral.ai > Limits):
+#   ministral-3b-2512  12.50 rps | 1,500,000 tok/min
+#   ministral-8b-2512   3.13 rps |   625,000 tok/min
+#   ministral-14b-2512  0.50 rps |   937,500 tok/min
+#   mistral-small-2603  0.83 rps |    50,000 tok/min
+#   mistral-medium-latest   ~0.42 rps | 25,000 tok/min
+#   codestral-2508      2.08 rps |   628,000 tok/min
+#   devstral-2512       0.83 rps | 1,000,000 tok/min
+#   mistral-large-2512  0.07 rps |   250,000 tok/min
+#   mistral-embed-2312  1.00 rps | 20,000,000 tok/min
+#   codestral-embed     1.00 rps |    50,000 tok/min
+#   mistral-moderation-2603 ~1.00 rps | 50,000 tok/min
 # Client paces to ~85% of these; a 429 pushes the model's next slot out.
 # ----------------------------------------------------------
 rate_limits:
-  ministral-3b-2512: 8.0
-  ministral-8b-2512: 2.5
-  mistral-small-2603: 2.0
-  mistral-medium-latest: 1.2
+  ministral-3b-2512: 10.0
+  ministral-8b-2512: 3.0
+  ministral-14b-2512: 0.45
+  mistral-small-2603: 0.75
+  mistral-medium-latest: 0.38
+  mistral-medium-2508: 0.5
+  mistral-medium-2604: 0.5
   codestral-2508: 2.0
   devstral-2512: 0.8
-  mistral-large-2512: 0.067
-  mistral-embed-2312: 4.0
-  codestral-embed: 4.0
-  mistral-moderation-2603: 4.0
+  mistral-large-2512: 0.065
+  mistral-embed-2312: 0.95
+  codestral-embed: 0.95
+  mistral-moderation-2603: 0.95
   default: 1.5
 
 # ----------------------------------------------------------
