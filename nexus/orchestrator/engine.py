@@ -80,6 +80,11 @@ GREETING_REPLIES = [
 # Calculator-style math never goes through the LLM — deterministic Python.
 MATH_EXPR = _re.compile(r"^[\s\d+\-*/×÷%^().,]+$")
 MATH_HAS_OP = _re.compile(r"[\d)]\s*[+\-*/×÷^]\s*[\d(]")
+# v1.8.1: tasks that mention these concern hosting/verification — they need the
+# full coder (start_server etc.), never the cheap quick-coder path.
+_QUICK_BLOCK = _re.compile(
+    r"host|server|verify|verification|port\s*\d|http|localhost|deploy|live|curl|serve",
+    _re.IGNORECASE)
 
 
 def quick_math(goal: str) -> Optional[str]:
@@ -291,10 +296,10 @@ class Orchestrator:
         while True:
             self._execute_dag(dag, task_id, t0)
             failed = dag.failed()
-            if not failed or report.replans >= max_replans or self.cancelled:
-                break
             if time.time() - t0 > self.overall_timeout:
                 report.stopped_reason = "overall timeout"
+                break
+            if not failed or report.replans >= max_replans or self.cancelled:
                 break
             report.replans += 1
             note = "\n".join(f"- {t.title}: {t.error or t.verdict}" for t in failed)
@@ -363,7 +368,7 @@ class Orchestrator:
                     t.status = TaskStatus.RUNNING
                     t.started = time.time()
                     self.ui.task_start(t)
-                    futures[pool.submit(self._run_task, t, dag, task_id)] = t
+                    futures[pool.submit(self._run_task, t, dag, task_id, t0)] = t
 
                 for fut in as_completed(futures):
                     t = futures[fut]
@@ -374,9 +379,26 @@ class Orchestrator:
                         t.error = str(e)[:300]
                     t.finished = time.time()
                     self.ui.task_end(t)
+                    # v1.8: enforce the overall deadline BETWEEN futures too —
+                    # a long task must not let the run sail past the cap
+                    if time.time() - t0 > self.overall_timeout:
+                        for tt in dag.tasks.values():
+                            if tt.status is TaskStatus.PENDING:
+                                tt.status = TaskStatus.FAILED
+                                tt.error = "overall timeout"
+                        break
 
     # ------------------------------------------------------------------
-    def _run_task(self, task: Task, dag: TaskDAG, task_id: str) -> None:
+    # ------------------------------------------------------------------
+    def _deadline_or_cancel(self, t0: float) -> bool:
+        """v1.8.1: cancelled once the overall cap is crossed — checked on every
+        agent STEP so a single long task can't sail past the deadline."""
+        if t0 and time.time() - t0 > self.overall_timeout:
+            self.cancelled = True
+            return True
+        return False
+
+    def _run_task(self, task: Task, dag: TaskDAG, task_id: str, t0: float = None) -> None:
         agent_name = task.agent
         task_budget = float(self.config.get("autonomy.task_timeout_seconds", 180)) * \
             (1 + self.max_retries * 0.6)          # retries get a shrinking allowance
@@ -399,16 +421,44 @@ class Orchestrator:
                 task.score = max(task.score, 50.0)
                 return
             task.attempts = attempt + 1
-            quick = agent_name == "coder" and len(task.description) < 400 and attempt == 0
+            # v1.8.1: the quick (cheap) coder must never handle hosting/verification
+            # — live TUI run: host task (short desc) went to codestral-2508 which
+            # returned an EMPTY response (0 tool calls), burning an attempt+critic round.
+            quick = (agent_name == "coder" and attempt == 0
+                     and len(task.description) < 400
+                     and not _QUICK_BLOCK.search(task.description))
             agent = self.agent_for(agent_name, quick=quick)
 
             outcome: AgentOutcome = agent.run(
                 f"{task.title}\n\n{task.description}", context,
-                on_step=lambda s, tt=task: self.ui.task_step(tt, s), task_id=task_id,
+                on_step=lambda s, tt=task: (self._deadline_or_cancel(t0) or
+                                            self.ui.task_step(tt, s)), task_id=task_id,
                 model=task.model or None)
+
+            # v1.8.1: hard deadline — no critic round after the cap is gone
+            # (live: the last task of the last plan ran 325s past the 900s cap
+            #  because only the NEXT future would have triggered the check)
+            if t0 and time.time() - t0 > self.overall_timeout:
+                task.status = TaskStatus.FAILED
+                task.error = "overall timeout"
+                return
             task.steps += len(outcome.steps)
             task.tokens += outcome.tokens
             task.output = outcome.output or task.output
+
+            # v1.8.1: deterministic insurance — a coding task that made ZERO tool
+            # calls (live: host task answered empty / 'I cannot use tools') is failed
+            # fast WITHOUT a 30-60s critic round; retry immediately with the fix note.
+            if agent_name == "coder" and not any(s.kind == "tool" for s in outcome.steps):
+                if attempt < self.max_retries:
+                    self.ui.event("retry", f"{task.id} made no tool calls — retry {attempt + 2}")
+                    context += ("\n\nPREVIOUS ATTEMPT MADE NO TOOL CALLS. You MUST actually call "
+                                "tools (list_dir/read_file/run_shell/start_server...) — a text-only "
+                                "answer to a coding/hosting task is always WRONG.")
+                    continue
+                task.status = TaskStatus.FAILED
+                task.error = "agent produced no tool calls (text-only or empty response)"
+                return
 
             if not outcome.ok and not outcome.output:
                 task.error = outcome.error or "agent produced no output"

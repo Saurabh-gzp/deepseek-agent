@@ -1,6 +1,53 @@
 # Changelog
 
+## [1.8.0] — hosting is EXECUTED, never a guide; the run never ends unhosted
+
+**Trigger (live A/B):** the user's own TUI run ended with the agent writing a
+`hosting_guide.md` and claiming "site is live at localhost:8000" — it had only
+run `python3 -m http.server 8000` in the foreground, which burned 120s of
+timeout and never served anything. Our reproduction run then showed the same
+anti-pattern surviving in new forms; every one is fixed at the harness level:
+
+1. **run_shell server choke-point (unconditional):** `python3 -m http.server`,
+   flask/uvicorn/gunicorn/hugo/jekyll, npm/pnpm/yarn run dev|start|serve,
+   vite/next, node/bun/server, `php -S`, `rails s`, `serve -s` are hard-blocked
+   in run_shell — BOTH foreground (hangs till timeout) AND `&`/nohup detached.
+   Root cause of the detached form (reproduced 2026-08-26): the tool's capture
+   pipes stay open so the call blocks, and after it returns the pipe read-ends
+   close → every request handler dies on BrokenPipeError → the server accepts
+   TCP but answers **EMPTY replies**. Only `start_server` (detached + log file +
+   port-wait + fetch + marker-verify in ONE call) is allowed.
+2. **Supervisor plan rules:** no "hosting guide" task ever (hosting is
+   executed; acceptance = verified HTTP 200 + marker); hosting marker must be a
+   literal the implement task was told to embed in `<title>`; HOSTING
+   ESCALATION — if the coder can't host, the supervisor runs `start_server`
+   itself and verifies; the run NEVER ends by telling the user to "run this
+   command yourself"; REPLAN REUSE — replans keep the SAME `projects/<slug>/`
+   dir and only redo failed tasks (live run re-researched 3× and built a second
+   folder `portfolio-site` beside `portfolio-website`).
+3. **Critic HOSTING CHECK extended:** a final answer handing a server command
+   to the user = FAIL; any "marker is present" claim must be proven by grepping
+   the actual html file (live: final summary claimed the marker while the
+   critic had shown it missing from both index.html files).
+4. **Engine discipline:** `_QUICK_BLOCK` — the cheap quick-coder is never used
+   for host/server/verify/port/http tasks (live: short description put the host
+   task on codestral-2508, which returned an EMPTY response → wasted attempt);
+   a coder task that finishes with ZERO tool calls is failed fast WITHOUT a
+   30-60s critic round and retried with a "you MUST call tools" note; the
+   overall deadline is enforced on every agent step (a long task can't sail
+   past the cap — the live run's last task burned 325s beyond the 900s cap because
+   only a later future would have triggered the check).
+5. **Test hygiene:** the server-block test's own `&`-detached server leaked out
+   of pytest and occupied :8000 with an EMPTY directory — the live agent's
+   "server" was actually answering from it and the whole hosting phase was
+   polluted. Test now kills what it spawns and the whole suite leaves nothing
+   listening.
+
+Verified: 142/142 tests; live TUI run (Mistral keys) analysed end-to-end and
+the failure chain in this section matches it step for step.
+
 ## [1.7.0] — multi-engine web search: never "No results" again
+ — multi-engine web search: never "No results" again
 
 **Root cause found (live probe):** DuckDuckGo HTML/Lite rate-limits the IP after
 ~2-3 rapid queries (returns an "anomaly" page with 0 results). The researcher's

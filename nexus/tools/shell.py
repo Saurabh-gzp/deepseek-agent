@@ -48,6 +48,33 @@ DELETE_GUIDE = ("STOP attempting shell/python deletions — they are ALWAYS bloc
                 "The ONLY way: call delete_path(path=...) — it asks the user once, "
                 "and on 'always' the whole delete batch proceeds without re-asking.")
 
+# --- foreground-server choke-point (v1.8) ---------------------------------
+# A long-running server started in the FOREGROUND hangs until the tool timeout
+# (live bug: `python3 -m http.server 8000` burned 120s and produced nothing,
+# then the agent wrote a "hosting guide" and claimed the site was live).
+# A DETACHED server (`cmd &`/nohup) is just as broken: run_shell's capture
+# pipes stay open so the call hangs until timeout, and after the call the
+# pipe read-ends close -> every request handler dies on BrokenPipeError and
+# the site accepts TCP but answers with EMPTY replies (verified live :8000).
+# => server commands run ONLY via start_server, never in run_shell.
+FOREGROUND_SERVER = re.compile(
+    r"python3?\s+-m\s+http\.server"
+    r"|(npm|pnpm|yarn)\s+(run\s+)?(start|dev|serve)\b"
+    r"|(flask|uvicorn|gunicorn|hugo|jekyll)\s+"
+    r"|(node|bun)\s+\S*(server|app)\b|vite\b|next\s+(dev|start|build)\b"
+    r"|php\s+-S\b|rails\s+s\b|serve\s+-s\b",
+    re.IGNORECASE)
+DETACHED = re.compile(r"(?:^|[^&])&(?![&])|nohup|disown|setsid|start_server\s*\(")
+SERVER_GUIDE = (
+    "BLOCKED: this is a long-running SERVER — in run_shell it would hang until "
+    "the tool timeout, and even with '&'/nohup it ends up accepting connections "
+    "but answering EMPTY replies (the tool's capture pipes close). Use the "
+    "start_server tool — it starts the server DETACHED with a log file, waits "
+    "for the port, fetches the page and verifies content in ONE call, e.g.:  "
+    "start_server(command='python3 -m http.server 8000 --directory projects/portfolio-website', "
+    "port=8000, marker='Portfolio', name='portfolio') — then report its verified output. "
+    "Never claim a site is 'live' without a verified HTTP 200 + marker.")
+
 
 class ShellTools:
     def __init__(self, workspace: Path, timeout: int = 120,
@@ -80,6 +107,11 @@ class ShellTools:
         # ---- deletion choke-point: rm/shred/find -delete etc. hard-blocked
         if SHELL_DELETE.search(command):
             return ToolResult(False, error="BLOCKED: this command deletes files. " + DELETE_GUIDE)
+        # ---- foreground-server choke-point: servers must use start_server
+        # (both foreground AND &-detached forms are broken in run_shell —
+        #  detached leaves a listener that answers EMPTY replies, see SERVER_GUIDE)
+        if FOREGROUND_SERVER.search(command):
+            return ToolResult(False, error=SERVER_GUIDE)
         danger = self.is_dangerous(command)
         if danger:
             if self.approval_cb is None:

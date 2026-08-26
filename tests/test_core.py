@@ -195,6 +195,33 @@ class TestShell:
     def test_timeout(self, sh):
         assert not sh.run_shell("sleep 5", timeout=1).ok
 
+    def test_foreground_server_blocked(self, sh):
+        """v1.8: server commands may run ONLY through start_server. Foreground
+        forms hang until timeout; &-detached forms leave a listener that answers
+        EMPTY replies (capture pipes close) — both are hard-blocked. Plain
+        non-server && / & commands stay allowed."""
+        blocked = [
+            "python3 -m http.server 8000 --directory projects/x",
+            "cd projects/x && python3 -m http.server 8000",
+            "python3 -m http.server 8011 --directory . & sleep 1; curl -s localhost:8011",
+            "nohup python3 -m http.server 8012 >/dev/null 2>&1 &",
+            "npm run dev",
+            "flask run --port 5000",
+        ]
+        allowed = [
+            "sleep 0.2 & wait",
+            "echo hello && echo world",
+        ]
+        for c in blocked:
+            r = sh.run_shell(c)
+            assert not r.ok and "start_server" in r.error, f"should block: {c}"
+        for c in allowed:
+            r = sh.run_shell(c)
+            assert "start_server" not in r.error, f"should NOT be blocked: {c}"
+        # hygiene: no test-spawned server may stay listening afterwards
+        import subprocess as _sp
+        _sp.run(["pkill", "-f", r"http.server 801[12]"], capture_output=True)
+
     def test_never_raises_on_garbage(self, sh):
         """v1.5: run_shell/run_python must convert ANY exception into a
         ToolResult error — the agent loop can never be killed by a tool bug."""
@@ -1315,3 +1342,27 @@ class TestWorkspaceCleanFixes:
         from nexus.agents.specialists import CoderAgent, CriticAgent
         assert "/dev/block/dm-*" in CoderAgent.system_prompt
         assert "DEVICE-REPORT CHECK" in CriticAgent.system_prompt
+
+
+class TestV181Rules:
+    """v1.8.1: live-TUI-run fixes — hosting may never be handed to the user,
+    replans must reuse the same project dir, the quick-coder is never used for
+    hosting tasks, and servers are blocked even detached."""
+
+    def test_quick_block_regex(self):
+        from nexus.orchestrator.engine import _QUICK_BLOCK
+        assert _QUICK_BLOCK.search("Host portfolio website locally and verify")
+        assert _QUICK_BLOCK.search("start http server and check port 8000")
+        assert not _QUICK_BLOCK.search("Implement portfolio website with best UI")
+        assert not _QUICK_BLOCK.search("Research Claude AI frontend design")
+
+    def test_hosting_rules_in_prompts(self):
+        from nexus.agents.specialists import CriticAgent
+        from nexus.orchestrator.engine import Orchestrator
+        crit = CriticAgent.system_prompt
+        assert "run this command yourself" in crit      # final-answer handoff = FAIL
+        assert "grepping the actual html file" in crit  # marker claim must be proven
+        sup_src = open("nexus/agents/specialists.py", encoding="utf-8").read()
+        assert "HOSTING MARKER DISCIPLINE" in sup_src
+        assert "REPLAN REUSE" in sup_src
+        assert "HOSTING ESCALATION" in sup_src
