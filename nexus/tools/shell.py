@@ -431,12 +431,22 @@ class ShellTools:
         import urllib.request as _ur
         import urllib.error as _ue
 
-        # pick a free port if 0
+        # if requested port is already bound, pick a free one (live: stale
+        # Varanasi server occupied :8000 so Ops Lab "verified" the wrong site)
+        if port and port != 0:
+            probe = _socket.socket()
+            try:
+                probe.bind(("127.0.0.1", int(port)))
+            except OSError:
+                port = 0
+            finally:
+                probe.close()
         if port == 0:
             s = _socket.socket()
             s.bind(("127.0.0.1", 0))
             port = s.getsockname()[1]
             s.close()
+        command = re.sub(r"(http\.server\s+)\d+", rf"\g<1>{port}", command or "")
         logf = self.root / f".server_{port}.log"
         cmd = f"cd {self.root} && {command}"
         try:

@@ -21,7 +21,9 @@ READ_ONLY = ["read_file", "list_dir", "search_files", "find_files", "load_skill"
              "search_knowledge", "system_info"]
 WEB = ["web_search", "web_fetch", "http_request"]
 WRITE = ["write_file", "edit_file", "move_path"]
-EXEC = ["run_shell", "run_python", "install_package"]
+EXEC = ["run_shell", "run_python", "install_package", "start_server"]
+OFFICE = ["make_pptx", "make_pdf", "make_docx"]
+DBMS = ["sqlite_exec", "sqlite_schema"]
 MEM = ["remember", "index_knowledge"]
 
 
@@ -395,7 +397,7 @@ class WorkerAgent(BaseAgent):
     role_key = "worker"
     agent_name = "worker"
     allowed_tools = READ_ONLY + WRITE + WEB + ["run_python", "run_shell",
-                                               "delete_path", "move_path"]
+                                               "delete_path", "move_path"] + OFFICE + DBMS
     max_steps = 10
     system_prompt = (
         "You are a GENERAL WORKER agent. You execute one concrete subtask end-to-end: "
@@ -457,7 +459,7 @@ class ResearcherAgent(BaseAgent):
 class CoderAgent(BaseAgent):
     role_key = "coder_repo"
     agent_name = "coder"
-    allowed_tools = READ_ONLY + WRITE + EXEC + ["delete_path"]
+    allowed_tools = READ_ONLY + WRITE + EXEC + ["delete_path"] + OFFICE + DBMS
     max_steps = 14
     system_prompt = (
         "You are the CODING agent. You inspect, write and fix real code in the workspace.\n"

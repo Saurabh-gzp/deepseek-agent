@@ -386,7 +386,20 @@ class Orchestrator:
             report.stopped_reason = "; ".join(
                 x for x in [report.stopped_reason or "", "hosting not verified"] if x)
         elif self._goal_needs_host(goal, dag) and self._server_evidence:
-            report.verified = True
+            ev = " ".join(self._server_evidence).lower()
+            slug = ""
+            try:
+                slug = str(self.ctx.state.get("project_dir") or "").rsplit("/", 1)[-1].lower()
+            except Exception:
+                slug = ""
+            # stale server on :8000 serving another project is NOT this goal
+            if slug and slug not in ev and slug.replace("-", " ") not in ev:
+                report.verified = False
+                report.stopped_reason = "; ".join(
+                    x for x in [report.stopped_reason or "",
+                                "hosting evidence does not match this project"] if x)
+            else:
+                report.verified = True
         report.elapsed = time.time() - t0
         report.tokens = sum(t.tokens for t in dag.tasks.values())
 
@@ -515,10 +528,18 @@ class Orchestrator:
                 if dm and not (Path(self.ctx.config.workspace) / dm.group(1)).exists():
                     m = None
             if m is None:                       # invalid/absent spec -> heuristic
-                base = Path(self.ctx.config.workspace) / "projects"
-                if not base.exists():
+                ws = Path(self.ctx.config.workspace)
+                pdir = ""
+                try:
+                    pdir = str(self.ctx.state.get("project_dir") or "")
+                except Exception:
+                    pdir = ""
+                scoped = (ws / pdir) if pdir else (ws / "projects")
+                if not scoped.exists():
+                    scoped = ws / "projects"
+                if not scoped.exists():
                     return False
-                cands = sorted(base.rglob("index.html"),
+                cands = sorted(scoped.rglob("index.html"),
                                key=lambda p: p.stat().st_mtime, reverse=True)
                 if not cands:
                     return False

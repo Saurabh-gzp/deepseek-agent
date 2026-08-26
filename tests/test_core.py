@@ -1398,9 +1398,12 @@ class TestV181Rules:
     def test_quick_block_regex(self):
         from nexus.orchestrator.engine import _QUICK_BLOCK
         assert _QUICK_BLOCK.search("Host portfolio website locally and verify")
-        assert _QUICK_BLOCK.search("start http server and check port 8000")
+        assert _QUICK_BLOCK.search("start_server on port 8000")
+        assert _QUICK_BLOCK.search("serve at localhost")
         assert not _QUICK_BLOCK.search("Implement portfolio website with best UI")
         assert not _QUICK_BLOCK.search("Research Claude AI frontend design")
+        assert not _QUICK_BLOCK.search("Create SQLite shop.db and verify JOIN")
+        assert not _QUICK_BLOCK.search("Create TASKS.md checklist")
 
     def test_hosting_rules_in_prompts(self):
         from nexus.agents.specialists import CriticAgent

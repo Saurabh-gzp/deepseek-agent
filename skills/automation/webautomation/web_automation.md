@@ -30,10 +30,10 @@ request. On the CLI: `curl -s URL | grep -o 'https://[^"]*api[^"]*' | sort -u`.
 the background, wait for the port, run checks, then kill it:
 
 ```bash
-cd app && nohup python -m http.server 8080 >/dev/null 2>&1 &
-for i in $(seq 1 20); do curl -s localhost:8080 >/dev/null && break; sleep 0.5; done
-curl -s localhost:8080 | head -40          # smoke test
-kill %1 2>/dev/null
+# NEVER run_shell http.server / nohup — harness blocks it (empty replies).
+# Use the start_server tool:
+#   start_server(command='python3 -m http.server 8080 --directory app',
+#                port=8080, marker='<title text>', name='app')
 ```
 
 **Reconnaissance-then-action** (for dynamic pages, browser or no browser):

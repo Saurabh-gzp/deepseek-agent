@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.8] — office + sqlite tools, task/OOP/DBMS skills, start_server on coder whitelist
+
+New tools: `make_pptx`, `make_pdf`, `make_docx`, `sqlite_exec`, `sqlite_schema`.
+Coder/worker can actually *see* `start_server` (it was registered but missing
+from `allowed_tools`). Skills: office docs, sqlite DBMS, Python OOP, task
+management. Web-automation skill no longer teaches blocked `nohup http.server`.
+
 ## [1.8.7] — goal-level hosting parachute + no DIY host-guide + honest files
 
 **Trigger (parity TUI, 8 keys, 4-phase Varanasi Digital Hub):** 913.6s,

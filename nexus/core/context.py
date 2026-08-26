@@ -12,6 +12,8 @@ from ..tools.base import Risk, ToolRegistry, ToolResult
 from ..tools.filesystem import FileSystemTools
 from ..tools.shell import ShellTools
 from ..tools.web import WebTools
+from ..tools.office import OfficeTools
+from ..tools.dbms import DbmsTools
 
 
 class AgentContext:
@@ -44,6 +46,10 @@ class AgentContext:
         self.shell.register(self.tools)
         if config.get("tools.web_search.enabled", True):
             self.web.register(self.tools)
+        self.office = OfficeTools(config.workspace)
+        self.office.register(self.tools)
+        self.dbms = DbmsTools(config.workspace)
+        self.dbms.register(self.tools)
         self._register_meta_tools()
 
         # --- safety --------------------------------------------------------
