@@ -319,3 +319,8 @@ instructions); `--update` mode keeps keys. Entire codebase now English-only.
 - Destructive SQL classified as delete_files (approval)
 - partial/timeout no longer count as success; no invented project on fix-only goals
 - Dangling DAG deps trigger fallback replan
+
+## 1.9.2
+- OpenAI-compatible urlopen watchdog (shared httpwatch)
+- acquire_or_wait never force-healthy before Retry-After
+- Memory/RAG SQLite reads under the same lock

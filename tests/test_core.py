@@ -609,11 +609,12 @@ class TestFailoverResilience:
         assert k is not None                          # but the agent never dies
         assert time.time() - t0 < 5
 
-    def test_long_cooldown_uses_key_early(self):
+    def test_long_cooldown_does_not_force_healthy(self):
         ring = KeyRing("t", ["a"], hard_cooldown=600)
         ring.report_failure(ring.keys[0], 401, "bad")
         k = ring.acquire_or_wait(max_wait=5)
-        assert k is not None and k.state is KeyState.HEALTHY   # forced back into service
+        assert k is None
+        assert ring.keys[0].state is KeyState.DEAD
 
     def test_empty_ring_returns_none(self):
         assert KeyRing("t", []).acquire_or_wait() is None
@@ -1843,3 +1844,29 @@ class TestV191Security:
         sh = ShellTools(tmp_path, timeout=10)
         r = sh.start_server(command="python3 -m http.server 0 --directory /etc", port=0)
         assert not r.ok and "BLOCKED" in (r.error or "")
+
+
+class TestOpenAIWatchdog:
+    def test_hung_openai_compat_bounded(self):
+        import time as _t
+        import nexus.providers.openai_compat as oc
+        from nexus.providers.keyring import KeyRing
+        ring = KeyRing("openai", ["a"])
+        prov = oc.OpenAICompatibleProvider(
+            {"timeout": 1, "watchdog_budget_slack": 0, "watchdog_grace": 0,
+             "base_url": "https://example.invalid/v1"},
+            ring, notifier=lambda *a, **k: None)
+
+        def hang(req, timeout, grace=0):
+            raise TimeoutError("watchdog: hung >1s")
+
+        orig = oc.json_watchdog
+        oc.json_watchdog = hang
+        try:
+            t0 = _t.time()
+            with pytest.raises(Exception):
+                prov._request("/chat/completions", {})
+            dt = _t.time() - t0
+        finally:
+            oc.json_watchdog = orig
+        assert dt < 8, dt
