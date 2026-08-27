@@ -30,6 +30,7 @@ HELP = """
   [accent]/sessions[/]             list past sessions
   [accent]/resume <n|id>[/]        resume a session (number or id; bare /resume = latest)
   [accent]/tools[/]                list available tools
+  [accent]/ledger[/]               what I actually observed this session (evidence)
   [accent]/projects[/]             list project folders in workspace
   [accent]/plan <goal>[/]          plan only, do not execute
   [accent]/auto <goal>[/]          force full autonomous orchestration
@@ -310,6 +311,30 @@ class NexusApp:
         self.ui.verbose = not self.ui.verbose
         self.ui.event("ok", f"verbose = {self.ui.verbose}")
 
+    def cmd_ledger(self, arg: str = "") -> None:
+        """ Evidence ledger — what Nexus ACTUALLY observed this conversation."""
+        led = self.ctx.state.get("ledger")
+        if led is None or not led.recent(99):
+            self.ui.event("info", "ledger empty — nothing observed yet this session")
+            return
+        st = led.stats()
+        self.ui.table("EVIDENCE LEDGER", ["turns", "observations", "failed"],
+                      [[str(st["turns"]), str(st["observations"]), str(st["failed"])]],
+                      ["muted", "accent", "err"])
+        rows = []
+        for t in led.recent(99):
+            for ev in (t.get("evidence") or []):
+                rows.append([str(ev.eid), ev.operation, (ev.target or "–")[:34],
+                             "ok" if ev.ok else "FAIL",
+                             (ev.observed or "").replace("\n", " ")[:48]])
+        if rows:
+            self.ui.table("OBSERVATIONS (newest last)", ["#", "tool", "target", "state", "saw"],
+                          rows[-24:], ["muted", "accent", "white", "muted", "muted"])
+        if arg.lower() in ("ctx", "full"):
+            self.ui.print(led.context_block(turns=99))
+
+    cmd_evidence = cmd_ledger
+
     def cmd_status(self, _: str = "") -> None:
         s = self.ctx.llm.stats.snapshot()
         rows = [["calls", s["calls"]], ["tokens", s["total_tokens"]],
@@ -491,7 +516,6 @@ class NexusApp:
         if arg.startswith("add "):
             key = arg[4:].strip()
             pname = self.ctx.llm.registry.default_name
-            ring = self.ctx.llm.registry.keyrings.get(pname)
             from ..core.keymanager import KeyManager
             KeyManager(self.config).add(pname, key)
             r2 = self.ctx.llm.registry.ensure_provider(pname, [key])

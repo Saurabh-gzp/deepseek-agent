@@ -103,11 +103,25 @@ class MistralProvider(BaseProvider):
                 break
             attempt_timeout = int(min(self.timeout, remaining))
             box: Dict[str, Any] = {}
+            closer: Dict[str, Any] = {}
 
             def _do() -> None:
                 try:
-                    with urllib.request.urlopen(req, timeout=attempt_timeout) as resp:
+                    resp = urllib.request.urlopen(req, timeout=attempt_timeout)
+                    # v1.10.4 BUG-6 FIX: publish the open response so the caller
+                    # can close it if this thread is abandoned. Previously a hung
+                    # _do() was leaked: py-spy showed Thread-59 parked in
+                    # ssl.read forever while the worker had already moved on —
+                    # one orphan thread + one open socket PER hung attempt.
+                    closer["resp"] = resp
+                    try:
                         box["data"] = json.loads(resp.read().decode("utf-8"))
+                    finally:
+                        try:
+                            resp.close()
+                        except Exception:
+                            pass
+                        closer.pop("resp", None)
                 except BaseException as e:  # noqa: BLE001 — capture, handle below
                     box["err"] = e
 
@@ -115,7 +129,15 @@ class MistralProvider(BaseProvider):
             th.start()
             th.join(attempt_timeout + self.watchdog_grace)
             if th.is_alive():
-                # hung beyond every budget — watchdog skip, key gets a failure streak
+                # hung beyond every budget — force-close the socket so the
+                # orphan thread dies in its own finally instead of leaking,
+                # then skip this key with a failure streak.
+                resp = closer.get("resp")
+                if resp is not None:
+                    try:
+                        resp.close()
+                    except Exception:
+                        pass
                 self.keyring.report_failure(key, None, f"watchdog: hung >{attempt_timeout}s")
                 last_err = ProviderError(
                     f"Key {key.label} hung {attempt_timeout}s (watchdog killed it)",
@@ -153,6 +175,10 @@ class MistralProvider(BaseProvider):
             else:
                 data = box.get("data")
                 if data is None:
+                    # v1.10.4 BUG-6 FIX: this path used to `continue` WITHOUT
+                    # report_failure(), so a provider answering 200-with-no-body
+                    # never cooled the key and never tripped the honest stop.
+                    self.keyring.report_failure(key, None, "empty body from API")
                     last_err = ProviderError("Empty response from API", retryable=True)
                     continue
                 usage = data.get("usage") or {}

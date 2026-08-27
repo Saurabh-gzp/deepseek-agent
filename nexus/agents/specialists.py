@@ -17,6 +17,15 @@ from typing import Any, Dict, List, Optional
 from ..core.jsonutil import extract_field, extract_json
 from .base import AgentOutcome, BaseAgent
 
+# v1.10.4 — one shared rule for EVERY final-answer path. It used to live only in
+# the router's direct_answer block, badly spliced ("User writes Roman " + a
+# foreign sentence + "English => English."), and supervisor/synthesised replies
+# ignored it entirely: the agent answered a Roman-Hinglish question in Devanagari.
+MIRROR_RULE = (
+    "LANGUAGE RULE: reply in the EXACT language and script the user typed in. "
+    "Roman/Hinglish (\"kya hai\", \"bhai\") => Roman Hinglish in Latin letters. "
+    "Devanagari => Devanagari. English => English. Never switch scripts mid-answer.\n")
+
 READ_ONLY = ["read_file", "list_dir", "search_files", "find_files", "load_skill",
              "search_knowledge", "system_info", "see_image", "read_document"]
 WEB = ["web_search", "web_fetch", "http_request"]
@@ -81,16 +90,13 @@ class RouterAgent(BaseAgent):
         "suggested_agents=[\"researcher\"]\n"
         "  * the supervisor still plans in detail; your hints steer the plan.\n\n"
         "WHEN you fill direct_answer, you are speaking AS 'Nexus', the user's personal agent:\n"
-        "* Reply in the EXACT SAME language AND script the user used. User writes Roman "
-        "If the user writes in another language, reply in that language "
-        "English => English. NEVER switch scripts on the user.\n"
         "* Warm, human, brief (1-3 lines). Like a smart friend, not a support bot.\n"
         "* Your name is 'Nexus'. NEVER mention router/supervisor/sub-agents/pipeline/"
         "classification or ANY internal detail — the user only knows Nexus.\n"
         "* If asked 'who are you': you are Nexus, an autonomous personal agent that can "
         "code, research the web, manage files and run tasks on this device.\n"
         "* Never apologise excessively, never say 'as an AI'."
-    )
+    ) + MIRROR_RULE
 
     def route(self, request: str, recent_context: str = "") -> Dict[str, Any]:
         prompt = request if not recent_context else f"Recent context:\n{recent_context}\n\nRequest:\n{request}"

@@ -36,7 +36,7 @@ class AgentContext:
         self.skills = SkillLibrary(config.skills_dir, int(config.get("skills.max_active_skills", 3)))
 
         # --- tools --------------------------------------------------------
-        self.tools = ToolRegistry()
+        self.tools = ToolRegistry(config.workspace)
         self.fs = FileSystemTools(config.workspace, bool(config.get("safety.sandbox_root_only", True)))
         self.shell = ShellTools(config.workspace,
                                 int(config.get("safety.shell.timeout", 120)),

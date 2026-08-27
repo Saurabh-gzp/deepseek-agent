@@ -169,6 +169,15 @@ SERVER_GUIDE = (
     "Never claim a site is 'live' without a verified HTTP 200 + marker.")
 
 
+def _os_path_exists_pid(pid: int) -> bool:
+    """True if /proc says the pid is still there (used before pruning registry)."""
+    import os as _os
+    try:
+        return bool(pid) and _os.path.exists(f"/proc/{int(pid)}")
+    except Exception:
+        return True
+
+
 class ShellTools:
     def __init__(self, workspace: Path, timeout: int = 120,
                  blocked_patterns: Optional[List[str]] = None, approval_cb=None):
@@ -591,14 +600,13 @@ class ShellTools:
                 probe.close()
                 tracked = ""
                 try:
-                    reg = self.root / self._SERVER_REG
-                    if reg.exists():
-                        import json as _j2
-                        d = _j2.loads(reg.read_text(encoding="utf-8") or "{}")
-                        if str(port) in d:
-                            tracked = (f" It is a harness-tracked server "
-                                       f"(pid {d[str(port)].get('pid')}) â "
-                                       f"call stop_server(port={port}) first.")
+                    d = self._read_registry()
+                    if str(port) in d:
+                        tracked = (f" It is a harness-tracked server "
+                                   f"(pid {d[str(port)].get('pid')}) — "
+                                   f"call stop_server(port={port}) first.")
+                except Exception:
+                    pass
                 except Exception:
                     pass
                 return ToolResult(False, error=(
@@ -660,14 +668,25 @@ class ShellTools:
                 f"server up on :{port} but marker {marker!r} NOT found in "
                 f"{path} (content mismatch) — first 200 chars: {body[:200]!r}"))
         self._remember_server(port, proc.pid)
+        # v1.10.4 BUG-2 FIX: the served directory was never part of this
+        # string, so engine.py's "does the hosting evidence match THIS
+        # project?" check could only ever fail — a genuinely hosted site came
+        # back 'unverified' (live: 3/3 tasks 98-100 pass, real HTTP 200 on
+        # :8131, report said unverified). Echo the resolved dir explicitly.
+        try:
+            served_rel = str(dabs.relative_to(self.root)) or "."
+        except (ValueError, OSError):
+            served_rel = str(dabs)
         out = (f"Server RUNNING (pid {proc.pid}) at http://127.0.0.1:{port}{path}"
                + (f"\nname: {name}" if name else "")
+               + f"\nserving: {served_rel} (directory={drel})"
                + f"\nverified: HTTP 200, {len(body)} bytes fetched"
                + (f", marker {marker!r} found" if marker else "")
                + "\nThe server stays up — stop it later with stop_server(port="
                + str(port) + ").")
         return ToolResult(True, output=out,
-                          data={"pid": proc.pid, "port": port, "url": url})
+                          data={"pid": proc.pid, "port": port, "url": url,
+                                "serving": served_rel})
 
     # ------------------------------------------------------------------
     _SERVER_REG = ".nexus/servers.json"
@@ -685,24 +704,137 @@ class ShellTools:
         except Exception:
             pass
 
+    def _project_root(self) -> Path:
+        """The repo dir that launched the agent (parent of the workspace)."""
+        try:
+            return self.root.parent
+        except Exception:
+            return self.root
+
+    def _registry_files(self) -> List[Path]:
+        """All places a servers.json may live.
+
+        v1.10.4: the registry is written under the CURRENT working root, so a
+        server started in one nexus session was invisible to the next session
+        that opened a project subfolder as its workspace — the port was
+        genuinely busy and stop_server had a dead end (live: "cannot be stopped
+        using stop_server… you will need to manually stop"). Read every known
+        location so the harness can always act on what it can see.
+        """
+        cands = [self.root / self._SERVER_REG,
+                 self._project_root() / self._SERVER_REG]
+        return [c for c in dict.fromkeys(cands)]
+
+    def _read_registry(self, prune: bool = True) -> dict:
+        """Merged registry view. v1.10.5: entries are now PRUNED when their pid is
+        demonstrably gone, so a crash or a kill outside the harness no longer leaves
+        a permanent ghost (:8132 sat in servers.json for two sessions and every
+        state answer had to explain 'registered but NOT accepting connections')."""
+        import json as _j
+        merged: dict = {}
+        owners: dict = {}
+        for f in self._registry_files():
+            try:
+                if f.exists():
+                    data = _j.loads(f.read_text() or "{}")
+                    for k, v in data.items():
+                        merged.setdefault(str(k), v)
+                        owners.setdefault(str(k), f)
+            except Exception:
+                continue
+        if not prune or not merged:
+            return merged
+        stale = []
+        for port, info in list(merged.items()):
+            pid = int((info or {}).get("pid") or 0)
+            alive = False
+            try:
+                import socket as _s
+                sk = _s.socket()
+                sk.settimeout(0.35)
+                try:
+                    alive = sk.connect_ex(("127.0.0.1", int(port))) == 0
+                finally:
+                    sk.close()
+            except Exception:
+                alive = bool(pid) and _os_path_exists_pid(pid)
+            if not alive:
+                stale.append((port, pid))
+        if not stale:
+            return merged
+        for port, _pid in stale:
+            merged.pop(port, None)
+        try:  # rewrite the file(s) we cleaned
+            for f in {owners.get(p) for p, _ in stale if owners.get(p)}:
+                data = _j.loads(f.read_text() or "{}")
+                for p, _ in stale:
+                    data.pop(str(p), None)
+                f.write_text(_j.dumps(data), encoding="utf-8")
+        except Exception:
+            pass
+        return merged
+
+    @staticmethod
+    def _pid_on_port(port: int) -> int:
+        """Best-effort owner of a TCP port, stdlib-only (Termux friendly)."""
+        import os as _os
+        try:
+            inodes = set()
+            for proto in ("tcp", "tcp6"):
+                with open(f"/proc/net/{proto}", "r", encoding="utf-8") as fh:
+                    for line in fh.readlines()[1:]:
+                        f = line.split()
+                        if len(f) < 10:
+                            continue
+                        try:
+                            local_port = int(f[1].rsplit(":", 1)[1], 16)
+                        except (ValueError, IndexError):
+                            continue
+                        if local_port == int(port) and f[3].upper() == "0A":
+                            inodes.add(f[9])
+            if not inodes:
+                return 0
+            for d in _os.listdir("/proc"):
+                if not d.isdigit():
+                    continue
+                fd_dir = f"/proc/{d}/fd"
+                try:
+                    for fd in _os.listdir(fd_dir):
+                        try:
+                            tgt = _os.readlink(f"{fd_dir}/{fd}")
+                        except OSError:
+                            continue
+                        if tgt.startswith("socket:[") and tgt[8:-1] in inodes:
+                            return int(d)
+                except OSError:
+                    continue
+        except Exception:
+            return 0
+        return 0
+
     def stop_server(self, port: int = 0, pid: int = 0, **kwargs) -> ToolResult:
         """Stop a server previously started by start_server (by port or pid)."""
         import signal
         port = int(port or 0)
         pid = int(pid or 0)
-        if not pid:
-            reg = self.root / self._SERVER_REG
-            if reg.exists():
-                try:
-                    data = json.loads(reg.read_text(encoding="utf-8") or "{}")
-                    if str(port) in data:
-                        pid = int(data[str(port)].get("pid") or 0)
-                except Exception:
-                    pass
+        if not pid and port:
+            try:
+                pid = int(self._read_registry().get(str(port), {}).get("pid") or 0)
+            except Exception:
+                pid = 0
+        untracked_note = ""
+        if not pid and port:
+            # not tracked by THIS session — find the real owner of the socket
+            pid = self._pid_on_port(port)
+            if pid:
+                untracked_note = (f"port {port} was owned by pid {pid}, which this "
+                                  f"session did not start — resolved via /proc, not the registry")
         if not pid:
             return ToolResult(False, error=(
-                f"No tracked server for port {port}. Pass pid= explicitly, or "
-                "only servers started via start_server can be stopped by port."))
+                f"No server process found on port {port} — neither the registry nor "
+                "/proc shows a listener, so there is nothing to stop. If a server "
+                "answered earlier it already exited (start_server re-checks the port "
+                "before reusing it)."))
         try:
             os.kill(pid, signal.SIGTERM)
         except ProcessLookupError:
@@ -739,9 +871,13 @@ class ShellTools:
                 reg.write_text(json.dumps(data), encoding="utf-8")
         except Exception:
             pass
-        return ToolResult(True, output=(
-            f"Server STOPPED (pid {pid}" + (f", port {port}" if port else "") +
-            "). Verified: process gone" + (", port free" if port else "") + "."))
+        out = ("Server STOPPED (pid " + str(pid) +
+               (f", port {port}" if port else "") + "). Verified: process gone" +
+               (", port free" if port else "") + "."
+               + (f"  Note: {untracked_note}." if untracked_note else "")
+               + f"\nstopped: port {port or '?'} pid {pid}")
+        return ToolResult(True, output=out)
+
 
     # ------------------------------------------------------------------
     def register(self, reg: ToolRegistry) -> None:

@@ -39,6 +39,10 @@ class Task:
     steps: int = 0
     tokens: int = 0
     depth: int = 0
+    # v1.10.4 §12: filled by the runner so the critic policy can tell a
+    # read-only query from work that could silently be wrong.
+    touched: bool = False        # wrote/deployed/installed anything?
+    clean_reads: bool = False    # >=1 tool call, all read-only, all succeeded
 
     @property
     def elapsed(self) -> float:

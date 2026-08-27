@@ -85,10 +85,6 @@ class VisionTools:
             {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
         ]
         try:
-            from ..llm.client import ChatResult  # type: ignore
-        except Exception:
-            ChatResult = None  # noqa: N806
-        try:
             # Prefer chat() so multimodal content is passed through.
             llm = getattr(self, "_llm", None)
             if llm is not None and hasattr(llm, "chat"):

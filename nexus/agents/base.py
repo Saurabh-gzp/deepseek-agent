@@ -9,11 +9,17 @@ Har agent:
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from ..tools.base import ToolRegistry, ToolResult
+
+# §11: does this failed call look like a path/argument problem (vs a real failure)?
+_PATHISH = re.compile(
+    r"list_dir|read_file|find_files|search_files|not found|No such file|FileNotFound|"
+    r"outside workspace|Path outside", re.I)
 
 
 @dataclass
@@ -120,6 +126,29 @@ class BaseAgent:
     def tool_specs(self) -> List[dict]:
         return self.tools.specs_for(self.agent_name, self.allowed_tools)
 
+    # v1.10.4 §19/§20: outputs that must never be truncated — the model needs
+    # them byte-exact to reason about the task (code it just wrote, etc.)
+    FULL_TOOLS = {"read_file", "edit_file", "write_file", "run_python", "git_diff"}
+    STALE_CHARS = 700          # older tool results keep only their head
+
+    def _trim_transcript(self, messages: List[dict]) -> int:
+        """Rolling truncation: last 3 tool results verbatim, older ones as heads.
+
+        This is the single biggest token saving in the loop — every step re-sends
+        the whole history at up to 7,000 chars per result (measured: ~3.3k
+        tokens/call, 39.8k tokens for one DESIGN.md).
+        """
+        saved = 0
+        idx = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+        for i in idx[:-3]:
+            cur = str(messages[i].get("content") or "")
+            if len(cur) <= self.STALE_CHARS:
+                continue
+            cut = cur[:self.STALE_CHARS] + f"\n…[older result trimmed {len(cur) - self.STALE_CHARS} chars]"
+            messages[i]["content"] = cut
+            saved += len(cur) - len(cut)
+        return saved
+
     def run(self, task: str, context: str = "", max_steps: int = 0,
             on_step: Optional[Callable[[AgentStep], None]] = None,
             task_id: str = "global", model: Optional[str] = None) -> AgentOutcome:
@@ -150,6 +179,7 @@ class BaseAgent:
                                     self._partial(steps) or "Timed out",
                                     steps, tokens, model_used, time.time() - t0,
                                     error=f"timeout after {timeout}s")
+            self._trim_transcript(messages)      # v1.10.4 token-efficiency
             try:
                 res = self.llm.chat(self.role_key, messages, tools=specs or None,
                                     task_id=task_id, model=model)
@@ -201,9 +231,26 @@ class BaseAgent:
                 steps.append(step)
                 if on_step:
                     on_step(step)
+
+                # v1.10.4 §3/§22: record every observation in the evidence ledger
+                # so follow-up turns can cite it instead of guessing.
+                led = self.ctx.state.get("ledger")
+                if led is not None:
+                    try:
+                        led.record(name, args, out.ok, out.as_text(3000), agent=self.agent_name)
+                        if out.ok and name in ("write_file", "edit_file"):
+                            led.note_artifact(str(args.get("path", "")))
+                    except Exception:
+                        pass
+
+                body = out.as_text(7000)
+                # §7: fence anything that came from outside before it re-enters
+                # the loop — model-usable text must be marked as untrusted DATA.
+                if name in ("web_fetch", "web_search", "http_request", "read_document"):
+                    body = self.ctx.guard.wrap_untrusted(body)
                 messages.append({"role": "tool", "name": name,
                                  "tool_call_id": call.get("id", f"call_{i}"),
-                                 "content": out.as_text(7000)})
+                                 "content": body})
                 consec_fail = consec_fail + 1 if not out.ok else 0
                 if not out.ok:
                     sig = (name, json.dumps(args, sort_keys=True, default=str)[:400])
@@ -214,6 +261,18 @@ class BaseAgent:
                             "DIAGNOSE: you just repeated the EXACT same failed tool call. "
                             "Do not run it again. Read the ERROR, change the approach "
                             "(different tool/args/path) or FINALIZE honestly."})
+                    elif _PATHISH.search(f"{name} {str(args)}"):
+                        # §11: a failed READ because of a path argument is a
+                        # normalisation problem, not a decision. Diagnose once,
+                        # cheaply — do not keep guessing paths.
+                        messages.append({"role": "user", "content":
+                            f"PATH DIAGNOSIS (read-only failure — no need to fail again): "
+                            f"the ACTIVE workspace root is `{self.ctx.config.workspace}`, "
+                            f"and every fs tool resolves RELATIVE paths against it. So '.' "
+                            f"IS the workspace — `workspace/...` is redundant and wrong here. "
+                            f"If you do not know where a file lives, call "
+                            f"find_files(pattern='<name>') ONCE and use the path it returns. "
+                            f"Do not re-derive the same path a third time."})
                 else:
                     self._last_fail_sig = None
 

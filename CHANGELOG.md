@@ -1,5 +1,161 @@
 # Changelog
 
+## [1.10.5] — the last four real gaps, closed (host fast-path, registry TTL, recap cost, script drift)
+
+Found by continuing to drive the **live TUI** after the 1.10.4 pass; each item was
+re-produced, fixed and re-tested there (plus an offline probe where a run would cost
+minutes of rate-limited calls).
+
+- **`start_server` permission bug (new, and it had been silently killing one of my own
+  fixes):** a harness-level call used agent name `harness` →
+  `Tool 'start_server' not permitted for agent 'harness'`. The EXECUTE-risk allow-list is
+  `supervisor/coder/worker/solo`. Fixed to `solo`.
+- **Deterministic hosting fast path (`L1-host-deterministic`)** — `portfolio-site ko port
+  8151 pe serve karo` was **2m51s / 75,603 tokens** through `router→plan→coder→critic→
+  synthesize` to arrive at exactly what `start_server()` already does atomically (detached
+  start → wait for the port → HTTP fetch → marker check). Now one tool call:
+  **0.43 s / 0 tokens / 0 LLM**, `verified=True` only because the tool's own output proves
+  it, and the run is recorded in the ledger like any other turn. Gate is deliberately
+  narrow — serve/host verb + explicit imperative + a stated port + an existing folder
+  containing `index.html`. `mujhe ek naya landing page bana ke host karo` and
+  `random-folder ko 8148 pe host karo` still fall through to the full pipeline (verified:
+  both return `None` in 0.00 s). Note `_is_hosting_intent()` was NOT usable here: it is
+  tuned for the quick-coder block (wants `http.server` / `localhost:NNNN`) and returns
+  False for the exact Hinglish phrasing users type.
+- **Session recap paid a wasted router call:** a recap passed the L2 gate, entered
+  `_evidence_answer`, and was then bounced to the `env_resolve()` branch (which has no
+  recap resolver) → `None` → out of L2 → into ROUTE. Live: 1 extra classification and a
+  shallower summary. The reflection branch now also covers `is_session_recap()`; the
+  recap answers straight from the full ledger (`▸EVIDENCE` only, no `ROUTE`).
+- **`servers.json` had no TTL:** a server that died outside the harness left a
+  permanent ghost, so every state answer had to add "registered but NOT accepting
+  connections". The registry is now pruned on read (real socket connect first, `/proc/<pid>`
+  fallback) and the file is rewritten. Verified live: live entry survives, clean stop
+  removes it, an injected dead pid disappears on the next read.
+- **Script drift made honest instead of silent:** small models still answer Roman
+  Hinglish in Devanagari sometimes. `_flag_script_mismatch()` detects the mismatch
+  deterministically (user-Latin + 8+ Devanagari chars, ignoring stray quoted text) and
+  appends a visible note offering to repeat — no extra LLM call, no pretending.
+- `L2-grounded` report mode was missing on the evidence exit (showed as `dag`); set.
+- Structure re-verified by AST: `handle()` 615–1009, no nested defs, **0 unreachable
+  blocks** across `nexus/`, `py_compile` clean, `pyflakes nexus/` clean, `--version`
+  → 1.10.5.
+
+## [1.10.4] — grounded environment answers, evidence ledger, critic/synthesis budgets, safety fixes
+
+**Trigger (live TUI, 8-key pool):** `"bro workspace me kya hai"` → `intent=question ·
+orchestrate=False` → Nexus recited the *Termux app description* instead of listing the
+filesystem. Retried as `"abe apne workspace me dekh"` → router→supervisor→worker→critic→
+synthesis burned **15.9s + 16,180 tokens** on one `list_dir`, after the worker first
+guessed `list_dir("workspace")` (already the workspace root) and errored. Then
+`"isse tu kya sikha?"` was answered as a cold identity question ("Main Nexus hoon…") —
+the observation from two turns earlier was never consulted.
+
+### Routing / context (new `nexus/core/envintents.py`, `nexus/core/ledger.py`)
+1. **L0/L1 deterministic environment path** — a read-only state question whose answer
+   is one tool call (workspace listing, server registry, git status, memory stats, file
+   existence) is resolved by the harness with **0 LLM calls**. Never `router → DAG`.
+2. **Evidence ledger** — every tool observation is recorded per turn (tool, args, result,
+   artifacts, server state) and replayed into follow-up turns. `/ledger` shows it.
+3. **Anaphora resolution before routing** — "isse/isme/ye/previous/abhi/…" resolves to
+   the last turn with real evidence; `wants_observation()` keeps *work* requests that
+   merely contain a pronoun ("aur isme contact form add kar") on the supervisor path.
+4. **`env_guard()`** — a state-dependent question the router tried to answer directly is
+   either replaced with real tool evidence or forced to orchestration. Model world
+   knowledge can no longer impersonate an environment answer.
+5. **Tool-argument intelligence** — `paths.normalize_tool_args()` (wired into
+   `ToolRegistry.execute`) strips the redundant `workspace/` prefix and resolves a bare
+   filename to its unique match, annotating the result so the model learns the rule.
+6. **Path-failure diagnosis** — a failed read-only path call injects the actual
+   workspace root + "use find_files once" instead of letting the agent re-guess.
+
+### Efficiency (tokens / latency)
+7. **Critic policy** — `_should_verify()` skips the critic for clean read-only tasks
+   (`task.clean_reads`, no write-tool in the outcome); code/research/hosting/acceptance
+   tasks still always verify.
+8. **Synthesis policy** — a single small deterministic result is passed through verbatim
+   instead of a `mistral-medium-2508` rewrite round.
+9. **Rolling transcript truncation** in `BaseAgent` (`_trim_transcript`): the last 3 tool
+   results stay verbatim, older ones keep a 700-char head. This was the dominant cost.
+
+### Bug fixes
+10. **BUG-1 (critical): the safety guard was ~1/6 effective.** `HIGH_RISK_CATEGORIES`
+    listed names the moderation model never returns (`dangerous_and_criminal_content`,
+    `self_harm`, `weapons`); real names are `dangerous`, `criminal`, `selfharm` — so
+    substring matching matched nothing. A jailbreak asking to exfiltrate API keys
+    (`jailbreaking=0.998`) passed. Now matched on the real taxonomy; jailbreak/PII
+    **escalate to approval** rather than hard-block.
+11. **BUG-2: verified hosting was reported as `unverified`.** `start_server` output never
+    contained the served directory, so `engine.py`'s slug-vs-evidence check could only
+    fail (live: 3/3 tasks pass, real HTTP 200 → "unverified"). Output now echoes
+    `serving: <rel dir>`, and the check accepts slug/relative-path/registry matches.
+12. **BUG-3: per-task time budget was dead code** — the guard sat *after* a `return`
+    inside the `cancelled` branch and could never run. Dedented.
+13. **BUG-6: watchdog leaked a thread + socket per hung attempt** (py-spy: `Thread-59`
+    parked in `ssl.read` after the worker moved on). The response is now published and
+    force-closed on abandon. Empty-body 200s also `report_failure()` now (they used to
+    `continue` silently, so no key ever cooled).
+14. **Untrusted-content fencing** — `web_fetch`/`web_search`/`http_request`/
+    `read_document` output is wrapped in `UNTRUSTED_EXTERNAL_CONTENT` markers before
+    re-entering the loop (moderation only covered user input + final output before).
+15. **BUG-4/5 housekeeping** — `app.version` 1.9.7 → 1.10.4 (banner/`--version` lied),
+    CHANGELOG gap 1.9.4→1.10.3 closed, README role table synced to config, unused
+    locals (`ring`, `blob`, `ChatResult`) removed.
+
+
+### 1.10.4 (cont.) — live-TUI hardening pass #2 (bugs found only by driving the real TUI)
+
+**Method:** every item below was reproduced, fixed and re-verified through a scripted pty
+run of the actual TUI (`tui_probe.py`), never through the repo test suite.
+
+- **L0 crash:** `INTENT_PATTERNS` held a 3-tuple `(name, rx, re.I)` while `classify()`
+  unpacked 2 → `ValueError: too many values to unpack` killed *all* environment
+  classification. The offline probes had reloaded the module but never iterated the
+  pattern list, so they passed. Now: single-shape patterns + a check that drives every
+  pattern and every resolver intent.
+- **`NameError: project_hint`** in `_resource_lookup` (parameter never threaded) — a
+  goal like `usme auth hai?` silently lost its project scope and searched the whole
+  workspace. Fixed, plus `re.I` → `_re.I` in two places (this module aliases `re`).
+- **`git_state` bad kwargs:** resolver passed `cwd='.'` to `git_status`, which the
+  registry rejects by *calling* the handler → `Bad arguments for git_status`, printed
+  next to `verified`. Registry now drops unsupported kwargs (signature-checked,
+  announced as `[args adjusted]`) before dispatch — fixes it for **every** tool, not
+  just git — and L0 gates `verified` on the resolver's `ok` flag.
+- **Bare state confirmations:** `ab chal raha hai?` was answered as small talk
+  ("Haan, sab theek hai! Tu kaisa hai?") — a factual claim about a socket, made
+  without checking. New `is_state_confirmation()` (with an **imperative veto** so
+  `server band kar do` stays a *write*) → deterministic socket probe, 265–438 ms.
+- **Over-broad state regex (self-inflicted):** the new pattern matched a bare
+  `status` anywhere and a dead `\bpe\b` branch matched `proto|type` — so
+  `README me ek line add karo` got answered with a server table and never edited the
+  file. Tightened to adjacent windows; `add|insert|append` added to `_WRITE_VERBS`.
+  Regression corpus: **40/40** (33 positives + imperative/casual negatives).
+- **Wrong-server stop (context leak):** `server band kar do` killed an orphan :8131
+  from an *earlier session* and reported success while the user's :8132 kept serving.
+  Plan and worker prompts now receive the server facts actually printed in this
+  conversation (`_runtime_state_block`); verified live — right port, right pid,
+  `stopped: port 8133 pid 38607`.
+- **`stop_server` dead end:** untracked ports answered "stop it manually". Now
+  resolves the real owner via `/proc` (stdlib, Termux-safe) across candidate registry
+  roots, and says so honestly.
+- **Cheap-synthesis honesty leak:** my own `L1-agent-raw` shortcut set
+  `report.verified = True` unconditionally; removed — `ok`/`verified` are computed
+  from verdict+score on every path. (Also: the "no synthesis for tiny answers" rule is
+  confirmed live: `▸SYNTHESIZE single deterministic result — evidence passed through`
+  on a real README edit.)
+- **Language mirroring:** the router's script rule was a corrupted 3-line splice and
+  applied only to `direct_answer`. One shared `MIRROR_RULE` constant now feeds the
+  router **and** the synthesis facts. (Residual: small models still drift to
+  Devanagari on some chat turns — documented, not hidden.)
+- **Session recap:** a 9-turn "what did I make you do" was planned as a **task**
+  (39.4 s / 22,144 tok, and it went off and built a PPTX). New `is_session_recap()`
+  routes it to the ledger with a full-session block → **2.7 s / 1,207 tok / 0 tasks**,
+  and it recalls the turn that failed, not just the ones that worked.
+- Engine structure re-verified by AST after the pass: `handle()` 526–906, no nested
+  defs, **0 unreachable blocks** in `nexus/`, `pyflakes nexus/` clean, `--version`
+  1.10.4.
+
+
 ## [1.8.8] — office + sqlite tools, task/OOP/DBMS skills, start_server on coder whitelist
 
 New tools: `make_pptx`, `make_pdf`, `make_docx`, `sqlite_exec`, `sqlite_schema`.

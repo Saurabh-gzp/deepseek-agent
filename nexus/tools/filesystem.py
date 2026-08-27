@@ -290,7 +290,7 @@ class FileSystemTools:
                  "required": ["path", "old_text", "new_text"]},
                 self.edit_file, Risk.WRITE,
                 agents=["supervisor", "coder", "worker", "solo"])
-        reg.add("list_dir", "Show directory tree of the workspace.",
+        reg.add("list_dir", "List a directory tree. PATH SEMANTICS: relative paths resolve AGAINST THE ACTIVE WORKSPACE ROOT, so '.' IS the workspace — do NOT pass 'workspace/' (it is redundant and wrong). Use an explicit subfolder like 'projects/<slug>' to go deeper. Side effects: none (read-only).",
                 {"type": "object", "properties": {"path": S, "depth": I,
                                                   "show_hidden": {"type": "boolean"}}},
                 self.list_dir, Risk.READ_ONLY)
@@ -299,7 +299,7 @@ class FileSystemTools:
                                                   "regex": {"type": "boolean"}, "max_results": I},
                  "required": ["pattern"]},
                 self.search_files, Risk.READ_ONLY)
-        reg.add("find_files", "Find files by name glob pattern e.g. '*.py'.",
+        reg.add("find_files", "Find files by NAME glob (e.g. '*.py', 'auth*') under the workspace. Use this ONCE to discover where a file lives instead of guessing paths; it does not read contents — for content use search_files. Args: glob=pattern, path=subfolder (optional).",
                 {"type": "object", "properties": {"glob": S, "path": S, "max_results": I}},
                 self.find_files, Risk.READ_ONLY)
         reg.add("delete_path",

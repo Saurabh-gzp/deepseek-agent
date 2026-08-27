@@ -15,8 +15,13 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from ..agents.base import AgentOutcome
-from ..agents.specialists import (CoderAgent, CriticAgent, ResearcherAgent,
-                                  RouterAgent, SupervisorAgent, WorkerAgent)
+from ..agents.specialists import (CoderAgent, CriticAgent, MIRROR_RULE,
+                                  ResearcherAgent, RouterAgent,
+                                  SupervisorAgent, WorkerAgent)
+from ..core.envintents import (classify as env_classify, has_reference,
+                               is_resource_lookup, is_session_recap,
+                               needs_grounding, resolve as env_resolve,
+                               wants_observation, wants_reflection)
 from .dag import Task, TaskDAG, TaskStatus
 
 import re as _re
@@ -113,6 +118,58 @@ _QUICK_BLOCK = _re.compile(
     r"(?:the\s+|this\s+|it\s+|my\s+|a\s+)?"
     r"(?:site|website|page|web\s?app|app|server|portfolio|landing|dashboard|frontend|url|it|them)"
     r")\b")
+
+
+def env_guard(ctx, goal: str, decision: Dict[str, Any], ui=None) -> Dict[str, Any]:
+    """§14 anti-hallucination: an environment question may NOT be answered from
+    world knowledge. If the router tried a direct answer for a state-dependent
+    request, either hand it to the deterministic resolver or force orchestration.
+
+    Returns the (possibly rewritten) decision. Never invents an answer here.
+    """
+    d = dict(decision or {})
+    if d.get("needs_orchestration"):
+        return d                      # already going to the supervisor: fine
+    direct = str(d.get("direct_answer") or "").strip()
+    if not direct:
+        return d
+    referential = is_resource_lookup(goal)
+    if not (needs_grounding(goal) or referential):
+        return d
+    try:
+        from ..core.envintents import resolve
+        hit = resolve(goal, {
+            "workspace": ctx.config.workspace, "memory": ctx.memory,
+            "server_registry": None,
+            "exec": lambda name, args: (lambda r: {
+                "ok": r.ok, "output": r.output, "error": r.error})(
+                ctx.tools.execute(name, args or {}, "solo")),
+            "config": ctx.config},
+            project_hint=str(ctx.state.get("project_dir")
+                             or ctx.state.get("last_project") or ""))
+    except Exception:
+        hit = None
+    if hit and hit.get("answer"):
+        # GROUND IT — replace the hallucinated prose with the real observation
+        if ui is not None:
+            ui.event("warn", ("resource question answered from world knowledge "
+                              "→ replaced with a real recursive search")
+                     if referential else
+                     "environment question answered from world knowledge "
+                     "→ replaced with real tool evidence")
+        d["direct_answer"] = hit["answer"]
+        d["intent"] = "question"
+        d["_grounded"] = True
+        return d
+    if ui is not None:
+        ui.event("warn", "environment question needs live state — routing to "
+                         "supervisor instead of answering from memory")
+    d["needs_orchestration"] = True
+    d["direct_answer"] = ""
+    d.setdefault("suggested_agents", [])
+    if "worker" not in (d.get("suggested_agents") or []):
+        d["suggested_agents"] = ["worker"] + list(d.get("suggested_agents") or [])
+    return d
 
 
 def _is_hosting_intent(text: str) -> bool:
@@ -280,7 +337,10 @@ class RunReport:
     replans: int = 0
     verified: bool = False
     stopped_reason: str = ""
-
+    intent: str = ""                    # v1.10.4: env:*/evidence-followup/chat/dag
+    evidence: List[Any] = field(default_factory=list)
+    llm_calls: int = 0                  # v1.10.4: performance budget accounting
+    mode: str = "dag"                   # L0 deterministic | L2 evidence | L4 dag
 
 class Orchestrator:
     def __init__(self, ctx):
@@ -322,6 +382,247 @@ class Orchestrator:
         return self._agent_cache[key]
 
     # ==================================================================
+    # v1.10.4 — deterministic environment answers + evidence ledger
+    # ==================================================================
+    _WRITE_VERBS = _re.compile(
+        r"\b(?:build|create|make|write|edit|modify|update|rename|move|copy|delete|remove|"
+        r"add|insert|append|rename_to|replace|patch|jod|jodo|badh|banao|banado|likh|daal|daalo|"
+        r"fix|refactor|install|deploy|publish|send|email|post|upload|download|convert|"
+        r"compress|migrate|save|generate|start|stop|restart|band\s+kar|"
+        r"chalao|host|serve|commit|push)\b"
+        r"|\b(?:isko|ise|is\s+folder|workspace)\b[^?!.]{0,30}\b(?:clean|delete|remove|band)\b",
+        _re.I)
+
+    def _read_only_goal(self, goal: str) -> bool:
+        """A goal that only ASKS about state (no mutation implied)."""
+        g = (goal or "").strip()
+        if not g or len(g) > 160 or "\n" in g:
+            return False
+        return not bool(self._WRITE_VERBS.search(g))
+
+    def _has_action_verb(self, goal: str) -> bool:
+        return bool(ACTION_VERB.search(goal or "")) or bool(self._WRITE_VERBS.search(goal or ""))
+
+    def _ledger(self):
+        led = self.ctx.state.get("ledger")
+        if led is None:
+            from ..core.ledger import EvidenceLedger
+            led = EvidenceLedger()
+            self.ctx.state["ledger"] = led
+        return led
+
+    def _active_project(self) -> str:
+        """Project the conversation is currently about (for 'usme/isme' scope)."""
+        return str(self.ctx.state.get("project_dir")
+                   or self.ctx.state.get("last_project")
+                   or self._ledger().current_project() or "")
+
+    def _env_ctx(self) -> Dict[str, Any]:
+        def _sig(tool_name: str):
+            t = self.ctx.tools.get(tool_name)
+            try:
+                import inspect
+                ps = inspect.signature(t.handler).parameters
+                return {k for k, v in ps.items() if v.kind is not v.VAR_KEYWORD}
+            except Exception:
+                return set()
+        return {"workspace": self.config.workspace,
+                "memory": self.ctx.memory, "tool_sig": _sig,
+                "server_registry": None,
+                "exec": lambda name, args: (
+                    (lambda r: {"ok": r.ok, "output": r.output, "error": r.error})(
+                        self.ctx.tools.execute(name, args or {}, "solo"))),
+                "config": self.config}
+
+    def _deterministic_env_answer(self, goal: str, report: RunReport, t0: float,
+                                  task_id: str) -> Optional[RunReport]:
+        intent = env_classify(goal)
+        if not intent:
+            return None
+        hit = env_resolve(goal, self._env_ctx(),
+                          project_hint=self._active_project())
+        if not hit or not hit.get("answer"):
+            return None
+        self.ui.phase("ENV", f"deterministic {intent} — no agent pipeline")
+        if hit.get("ok") is False:
+            self.ui.event("warn", f"deterministic {intent} could not be verified from runtime state")
+        led = self._ledger()
+        led.begin_turn(task_id, goal, intent=f"env:{intent}")
+        # remember WHICH project the conversation is now about: "usme auth hai?"
+        # must resolve to the folder we just listed, not to the whole workspace.
+        hit_proj = str((hit.get("evidence") or [{}])[0][1].get("path", "")
+                       ) if hit.get("evidence") else ""
+        if intent in ("project_tree", "resource_lookup") and hit_proj:
+            led.set_project(hit_proj)
+        for op, args, ok, out in hit.get("evidence") or []:
+            led.record(op, args, ok, out, agent="harness")
+        led.close_turn(hit["answer"])
+        if self.ctx.memory:
+            try:
+                self.ctx.memory.add_message("assistant", hit["answer"], "harness")
+            except Exception:
+                pass
+        ok_hit = hit.get("ok", True)
+        report.final = hit["answer"]
+        report.ok = bool(ok_hit)
+        report.verified = bool(ok_hit)   # deterministic tool output IS the evidence
+        report.mode = "L0-deterministic" if ok_hit else "L0-failed"
+        report.evidence = hit.get("evidence") or []
+        report.intent = f"env:{intent}"
+        report.elapsed = time.time() - t0
+        return report
+
+    def _deterministic_host(self, goal: str, report: RunReport, t0: float,
+                            task_id: str) -> Optional[RunReport]:
+        """v1.10.5 §19/§20 — 'host THIS existing folder on port N' is ONE tool call,
+        yet it was the single most expensive thing in the harness: live TUI runs of
+        `portfolio-site ko port 8133 pe serve karo` cost 2m51s / 75,603 tokens (and
+        once 6m07s / 148,439) to arrive at exactly what start_server() already does
+        atomically — start detached, wait for the port, fetch it, check the content
+        marker. The LLM added latency and a chance to get the port wrong, nothing else.
+
+        Deliberately narrow, and it DEGRADES rather than denies: it fires only when
+        (a) the goal is real hosting intent, (b) the port is stated, (c) the folder
+        exists under the workspace and already has an index file. Anything else —
+        a missing entry file, a site that must be built, no port given — returns
+        None and the full L4 pipeline runs, so 'build me a portfolio and host it'
+        is untouched.
+        """
+        g = goal or ""
+        # v1.10.5 gate: NOT _is_hosting_intent() — that predicate is deliberately
+        # strict for the *quick coder* (it wants http.server/localhost:NNNN shapes),
+        # so it returned False for the exact Hinglish phrasing users type:
+        # 'portfolio-site ko port 8131 pe serve karo'. Here the safety net is
+        # different and tighter in the way that matters: we require a serve verb,
+        # an EXPLICIT port, and an existing folder that already has an index file —
+        # anything that must be built falls through to the agents.
+        if not (_SERVE_VERB.search(g)
+                and _re.search(r"\b(?:serve|host|deploy|publish|launch)\w*\s+(?:karo|kar|do|de|please|kar\s+do|do\s+na)\b", g, _re.I)):
+            return None
+        m = _re.search(r"\bport\s*(\d{4,5})\b|\b(\d{4,5})\s+pe\b", g, _re.I)
+        if not m:
+            return None
+        port = int(m.group(1) or m.group(2))
+        root = Path(str(self.config.workspace or ".")).resolve()
+        try:
+            from ..core.ledger import current_project
+            scope = str(current_project() or "")
+        except Exception:
+            scope = ""
+        words = [w.strip("/.,:;'\"()").lower() for w in
+                 _re.findall(r"[A-Za-z0-9][A-Za-z0-9_.-]{2,}", goal or "")]
+        cand = ([scope] if scope else []) + [w for w in words
+                                             if w not in ("port", "karo", "server", "site",
+                                                          "http", "https", "start", "chal")
+                                             and not w.isdigit()]
+        target = ""
+        for name in cand:
+            n = name.split("/")[-1] if "/" in name else name
+            probes = [root / name, root / "projects" / name]
+            try:
+                probes += list((root / "projects").glob(f"*{n}*"))
+            except Exception:
+                pass
+            for pr in probes:
+                try:
+                    if pr.is_dir() and any((pr / f).exists() for f in
+                                          ("index.html", "index.htm")):
+                        target = str(pr.resolve().relative_to(root))
+                        break
+                except Exception:
+                    continue
+            if target:
+                break
+        if not target:
+            return None
+        self.ui.phase("HOST", f"deterministic start_server on :{port} — no agent pipeline")
+        # 'harness' is not an allow-listed agent for an EXECUTE-risk tool; 'solo'
+        # is the operator/one-shot context that start_server permits.
+        res = self.ctx.tools.execute("start_server",
+                                    {"port": port, "directory": target}, "solo")
+        out = (res.output or res.error or "").strip()
+        up = bool(res.ok and out)
+        ans = (f"Hosted `{target}` at **http://127.0.0.1:{port}** — proved by the "
+               f"tool itself (real HTTP fetch), no agent pipeline needed.\n\n"
+               f"```\n{out}\n```" if up else
+               f"Hosting on :{port} did NOT verify — tool output below, and I have "
+               f"not assumed it worked.\n```\n{out}\n```")
+        ans = self._flag_script_mismatch(goal, ans)
+        led = self._ledger()
+        led.begin_turn(task_id, goal, intent="host:deterministic")
+        led.record("start_server", {"port": port, "directory": target}, up, out,
+                   agent="harness")
+        led.close_turn(ans)
+        if self.ctx.memory:
+            try:
+                self.ctx.memory.add_message("assistant", ans, "harness")
+            except Exception:
+                pass
+        report.final = ans
+        report.ok = bool(up)
+        report.verified = bool(up)          # only the tool's own verdict says so
+        report.mode = "L1-host-deterministic" if up else "L1-host-failed"
+        report.intent = "host"
+        report.elapsed = time.time() - t0
+        return report
+
+    def _evidence_answer(self, goal: str, report: RunReport, t0: float,
+                         task_id: str) -> Optional[RunReport]:
+        """Ground a referential follow-up in what was actually observed."""
+        led = self._ledger()
+        src = led.last_with_evidence()
+        if not src:
+            return None
+        # a recap question needs EVERY turn, not the recency window
+        block = (led.context_block(max_chars=9000, turns=99)
+                 if is_session_recap(goal) else led.context_block(turns=3))
+        if not block:
+            return None
+        self.ui.phase("EVIDENCE", "answering from verified observations in this chat")
+        # v1.10.5: a SESSION RECAP has no deterministic resolver — it must take the
+        # LLM-over-ledger branch. It used to fall into the else-branch below, where
+        # env_resolve() returned None, so the recap escaped L2 (0 LLM) and the
+        # router re-classified it: 1 wasted call + a shallower answer.
+        if (wants_reflection(goal) or is_session_recap(goal)
+                or not self._read_only_goal(goal)):
+            prompt = (
+                f"USER QUESTION: {goal}\n\n{block}\n\n"
+                + ("This is a SESSION RECAP: enumerate every turn listed above, in order, "
+                   "with what the user asked and what was actually observed. Do not stop at "
+                   "the last two turns and do not invent turns that are not listed.\n\n"
+                   if is_session_recap(goal) else "")
+                + "Answer ONLY from the OBSERVED evidence above. Rules: never invent a "
+                "filename, count or meaning you did not observe; if the evidence does not "
+                "cover something, say it is not covered; no generic self-introduction; "
+                f"{MIRROR_RULE} 3-8 lines, concrete.")
+            try:
+                text = (self.ctx.llm.ask("router", prompt) or "").strip()
+            except Exception:
+                text = ""
+            if not text:
+                facts = "\n".join(f"- {f}" for f in led.fact_digest(8))
+                text = ("Main yahi keh sakta hoon jo actually observe hua:\n"
+                        + facts + "\n(iske aage ka matlab confirm karne ke liye mujhe "
+                        "aur files padhne honge.)")
+        else:
+            hit = env_resolve(goal, self._env_ctx())
+            if not hit:
+                return None
+            text = hit["answer"]
+        led.begin_turn(task_id, goal, intent="evidence-followup")
+        for ev in (src.get("evidence") or [])[-6:]:
+            led.record(ev.operation, {"path": ev.target}, ev.ok, ev.observed,
+                       source=ev.source, agent="ledger-replay")
+        led.close_turn(text)
+        report.final = self._flag_script_mismatch(goal, text)
+        report.ok = True
+        report.verified = True
+        report.mode = "L2-grounded"
+        report.intent = "evidence-followup"
+        report.elapsed = time.time() - t0
+        return report
+
+    # ==================================================================
     def handle(self, goal: str, force_orchestration: bool = False) -> RunReport:
         """Main entry: route -> (direct answer | full autonomous run)."""
         t0 = time.time()
@@ -332,11 +633,27 @@ class Orchestrator:
 
         # ---- safety: input moderation
         allowed, reason = self.ctx.guard.check_text(goal, "input")
-        if not allowed:
+        if allowed is False:
             report.final = f"⚠️ {reason}"
             report.stopped_reason = "moderation"
             report.elapsed = time.time() - t0
             return report
+        if allowed is None:
+            # v1.10.4 BUG-1 FIX: jailbreak / PII signals now ESCALATE to the
+            # user instead of silently passing (before this the classifier's
+            # category names didn't exist, so nothing escalated at all).
+            ok_user = True
+            if self.config.get("safety.approval_mode", "smart") != "never":
+                try:
+                    ok_user = bool(self.ctx.approve("moderation_escalate",
+                                                    {"reason": reason}, "system"))
+                except Exception:
+                    ok_user = True
+            if not ok_user:
+                report.final = f"⚠️ Not run — {reason}"
+                report.stopped_reason = "moderation escalate declined"
+                report.elapsed = time.time() - t0
+                return report
 
         # ---- fast path 0: greeting / identity — instant, deterministic,
         #      always in the user's own script, zero LLM calls
@@ -374,6 +691,54 @@ class Orchestrator:
                     self.ctx.memory.add_message("assistant", ans, "calculator")
                 return report
 
+        # ==================================================================
+        # v1.10.4 L0/L1 — DETERMINISTIC ENVIRONMENT PATH (0 LLM calls)
+        # A question whose answer is one read-only tool call must never become
+        # router → supervisor → worker → critic → synthesis.
+        # Live cost of doing it the old way: "abe apne workspace me dekh"
+        # = 15.9s + 16,180 tokens for a `list_dir`.
+        # ==================================================================
+        # ---- fast path: "host this existing folder on port N" — one tool call
+        # (before the read-only L0 pass: hosting is a WRITE-ish action, so L0's
+        # _read_only_goal gate would never let it through)
+        if not force_orchestration:
+            try:
+                hh = self._deterministic_host(goal, report, t0, task_id)
+            except Exception as e:  # noqa: BLE001
+                hh = None
+                self.ui.event("warn", f"deterministic host path skipped "
+                            f"({type(e).__name__}: {str(e)[:60]}) — using agents")
+            if hh is not None:
+                return hh
+
+        if not force_orchestration and self._read_only_goal(goal):
+            # v1.10.4: a fast path must never be able to kill the REPL — a
+            # resolver bug degrades to the normal agent route, not a traceback.
+            try:
+                hit = self._deterministic_env_answer(goal, report, t0, task_id)
+            except Exception as e:  # noqa: BLE001
+                hit = None
+                self.ui.event("warn", f"deterministic env path skipped "
+                            f"({type(e).__name__}: {str(e)[:70]}) — using agents")
+            if hit is not None:
+                return hit
+
+        # ---- L2 grounded follow-up: user refers to what we already observed
+        # ("isse tu kya sikha?", "isme kya important hai?"). Resolve the
+        # anaphora against the evidence ledger BEFORE the router can mistake it
+        # for a fresh identity/chat question (live bug: it answered
+        # "Main Nexus, tera personal agent hoon!…" to a follow-up).
+        if (not force_orchestration and (has_reference(goal) or is_session_recap(goal))
+                and not env_classify(goal)
+                and (wants_observation(goal) or is_session_recap(goal))):
+            try:
+                grounded = self._evidence_answer(goal, report, t0, task_id)
+            except Exception as e:  # noqa: BLE001
+                grounded = None
+                self.ui.event("warn", f"evidence path skipped ({type(e).__name__}) — using agents")
+            if grounded is not None:
+                return grounded
+
         # ---- memory context
         mem_ctx = ""
         if self.ctx.memory:
@@ -385,6 +750,7 @@ class Orchestrator:
         # ---- ROUTE
         self.ui.phase("ROUTE", "classifying request")
         tok0 = self.ctx.llm.stats.snapshot().get("total_tokens", 0)
+        self._ledger().begin_turn(task_id, goal, intent="routed")
         # v1.9.8: solve any embedded arithmetic locally, exactly, BEFORE routing
         # (router is forbidden from doing math, so mixed math+trivia questions
         #  no longer need a DAG just because one part is arithmetic)
@@ -398,7 +764,18 @@ class Orchestrator:
             rctx = mem_ctx[-1200:]
         else:
             rctx = ""
+        # v1.10.4 §3/§4: a referential follow-up gets the OBSERVATION ledger,
+        # not only chat memory — that is what lets "isse kya seekha" resolve.
+        if has_reference(goal):
+            block = self._ledger().context_block(turns=3)
+            if block:
+                rctx = (rctx + "\n\n" + block)[-2400:]
         decision = self.router.route(route_goal, rctx)
+        # v1.10.4 §1/§2/§6/§14: an environment-grounded question may NEVER be
+        # answered from world knowledge. Live bug: "bro workspace me kya hai"
+        # was intent=question + orchestrate=False and Nexus recited the
+        # Termux app description instead of listing the filesystem.
+        decision = env_guard(self.ctx, route_goal, decision, self.ui)
         # v1.9.8: guard against the PRECOMPUTED goal too — the original goal still
         # contains raw arithmetic ('17*23') and MATH_HAS_OP would force a full DAG
         # even though the math is already solved exactly at this point.
@@ -412,9 +789,13 @@ class Orchestrator:
             answer = str(decision.get("direct_answer") or "").strip()
             if not answer:
                 answer = self._live_chat(goal)
+            answer = self._flag_script_mismatch(goal, answer)
             report.final, report.ok, report.verified = answer, True, True
             report.elapsed = time.time() - t0
+            report.mode = "L2-grounded" if decision.get("_grounded") else "L0-chat"
+            report.llm_calls = 1 if answer else 0
             report.tokens = self.ctx.llm.stats.snapshot().get("total_tokens", 0) - tok0
+            self._ledger().close_turn(answer)
             if self.ctx.memory:
                 self.ctx.memory.add_message("assistant", answer, "router")
             return report
@@ -446,6 +827,9 @@ class Orchestrator:
                            "never recreate it.")
             self.ui.event("ok", "project memory: continuing existing project "
                                 "(context injected into the plan)")
+        rt_plan = self._runtime_state_block(goal)
+        if rt_plan:
+            plan_ctx = (plan_ctx + "\n\n" + rt_plan)[:4600]
         plan = self.supervisor.plan(goal, plan_ctx)
         report.plan = plan
         dag = TaskDAG.from_plan(plan)
@@ -515,42 +899,67 @@ class Orchestrator:
                     host_task.score = max(host_task.score, 100.0)
 
         # ---- SYNTHESIZE
-        self.ui.phase("SYNTHESIZE", "supervisor combining results")
         results = [t.to_dict() for t in dag.order()]
         report.tasks = results
-        # v1.8.3: hosting truth is FACT, not opinion — the synthesizer gets the
-        # verified evidence (or the explicit warning) so it can never fabricate
-        # "HTTP 200 / live at / marker found" (live run did exactly that).
-        facts_parts: List[str] = []
-        wf = self._workspace_facts()
-        if wf:
-            facts_parts.append(wf)
-        if self._goal_needs_host(goal, dag):
-            if self._server_evidence:
-                facts_parts.append(
-                    "VERIFIED HOSTING EVIDENCE (real start_server tool output, "
-                    "quote it as proof): " + self._server_evidence[-1])
-            else:
-                facts_parts.append(
-                    "HOSTING REALITY: NO verified hosting happened in this run — "
-                    "no start_server tool output shows HTTP 200 + marker. Your "
-                    "final answer MUST say hosting was NOT verified. NEVER write "
-                    "'HTTP 200', 'live at', 'marker found' or 'hosted' unless the "
-                    "RESULTS contain that actual evidence. NEVER tell the user to "
-                    "run python -m http.server / npm start / flask themselves — "
-                    "that is a hosting-guide, which is FORBIDDEN.")
-        facts = "\n\n".join(facts_parts)
-        try:
-            final = self.supervisor.synthesize(goal, results, plan, facts=facts)
-        except Exception as e:  # noqa: BLE001
-            final = self._manual_summary(dag, str(e))
-        report.final = self._sanitize_final(final, self._goal_needs_host(goal, dag))
+        # v1.10.4 §13 SYNTHESIS POLICY: a single small deterministic result does
+        # not need a medium-2508 synthesis round (that call alone cost more than
+        # the whole task that produced it). Pass the tool output through verbatim
+        # when it is short, factual, and nothing else needs combining.
+        done = [t for t in dag.order() if t.status is TaskStatus.DONE]
+        cheap = (len(dag.order()) == 1 and len(done) == 1 and not dag.failed()
+                 and len(done[0].output or "") <= 2600
+                 and not self._goal_needs_host(goal, dag)
+                 and not any(k in (done[0].output or "").lower()
+                             for k in ("error", "blocked", "not found")))
+        if cheap:
+            self.ui.phase("SYNTHESIZE", "single deterministic result — evidence "
+                                        "passed through (no LLM round)")
+            report.mode = "L1-agent-raw"
+            report.final = (done[0].output or "").strip()
+            # verified/ok are still decided below from the real verdict+score — the
+            # cheap path skips the SYNTHESIS LLM round, never the honesty check.
+            final = report.final
+        else:
+            # ---- SYNTHESIZE (expensive path)
+            self.ui.phase("SYNTHESIZE", "supervisor combining results")
+            # v1.8.3: hosting truth is FACT, not opinion — the synthesizer gets
+            # the verified evidence (or the explicit warning) so it can never
+            # fabricate "HTTP 200 / live at / marker found" (a live run did that).
+            facts_parts: List[str] = []
+            wf = self._workspace_facts()
+            if wf:
+                facts_parts.append(wf)
+            if self._goal_needs_host(goal, dag):
+                if self._server_evidence:
+                    facts_parts.append(
+                        "VERIFIED HOSTING EVIDENCE (real start_server tool output, "
+                        "quote it as proof): " + self._server_evidence[-1])
+                else:
+                    facts_parts.append(
+                        "HOSTING REALITY: NO verified hosting happened in this run — "
+                        "no start_server tool output shows HTTP 200 + marker. Your "
+                        "final answer MUST say hosting was NOT verified. NEVER write "
+                        "'HTTP 200', 'live at', 'marker found' or 'hosted' unless the "
+                        "RESULTS contain that actual evidence. NEVER tell the user to "
+                        "run python -m http.server / npm start / flask themselves — "
+                        "that is a hosting-guide, which is FORBIDDEN.")
+            facts_parts.append(MIRROR_RULE.strip() + " The user's request above is the "
+                               "language contract: if it is Roman Hinglish, answer in Roman "
+                               "Hinglish — never Devanagari, never English.")
+            facts = "\n\n".join(facts_parts)
+            try:
+                final = self.supervisor.synthesize(goal, results, plan, facts=facts)
+            except Exception as e:  # noqa: BLE001
+                final = self._manual_summary(dag, str(e))
+            report.final = self._sanitize_final(final, self._goal_needs_host(goal, dag))
 
         # ---- final safety + memory
         ok_out, reason = self.ctx.guard.check_text(final, "output")
-        if not ok_out:
+        if ok_out is False:
             final = f"⚠️ Output withheld: {reason}"
             report.final = final
+        report.mode = report.mode or "L4-dag"
+        self._ledger().close_turn(report.final or "")
         done_n = len(dag.done())
         report.ok = (done_n > 0 and not dag.failed()
                      and all((t.verdict or "pass") == "pass" for t in dag.done()))
@@ -563,14 +972,34 @@ class Orchestrator:
             report.stopped_reason = "; ".join(
                 x for x in [report.stopped_reason or "", "hosting not verified"] if x)
         elif self._goal_needs_host(goal, dag) and self._server_evidence:
-            ev = " ".join(self._server_evidence).lower()
+            ev = " \n".join(self._server_evidence).lower()
             slug = ""
             try:
                 slug = str(self.ctx.state.get("project_dir") or "").rsplit("/", 1)[-1].lower()
             except Exception:
                 slug = ""
+            # v1.10.4 BUG-2 FIX (part 2): accept when the evidence names this
+            # project by slug, by its workspace-relative path, or by an on-disk
+            # match of the served dir — substring-on-slug alone was too brittle.
+            served_dir = str(self.ctx.state.get("project_dir") or "").lower()
+            matches = bool(slug and (
+                slug in ev or slug.replace("-", " ") in ev
+                or (served_dir and served_dir in ev)
+                or f"serving: {served_dir}" in ev))
+            if not matches and served_dir:
+                # last resort: the running registry really points at this folder
+                try:
+                    reg = self.config.workspace / ".nexus" / "servers.json"
+                    if reg.exists():
+                        import json as _json
+                        for meta in (_json.loads(reg.read_text() or "{}")).values():
+                            if served_dir in str(meta).lower():
+                                matches = True
+                                break
+                except Exception:
+                    pass
             # stale server on :8000 serving another project is NOT this goal
-            if slug and slug not in ev and slug.replace("-", " ") not in ev:
+            if slug and not matches:
                 report.verified = False
                 report.stopped_reason = "; ".join(
                     x for x in [report.stopped_reason or "",
@@ -589,6 +1018,7 @@ class Orchestrator:
                                           {"tasks": len(dag), "replans": report.replans})
         self._clear_project_scope()
         return report
+
 
     # ==================================================================
     def _execute_dag(self, dag: TaskDAG, task_id: str, t0: float) -> None:
@@ -786,12 +1216,87 @@ class Orchestrator:
             return True
         return False
 
+    _DEVANAGARI = _re.compile(r"[\u0900-\u097F]")
+
+    def _flag_script_mismatch(self, goal: str, text: str) -> str:
+        """v1.10.5: prompt instructions cannot fully stop a small model from
+        answering Roman Hinglish in Devanagari. Rather than silently shipping a
+        script the user did not ask for, detect it deterministically and say so —
+        a visible, honest flag beats a silent mismatch (and beats a second LLM
+        call to re-ask)."""
+        try:
+            g, t = str(goal or ""), str(text or "")
+            if not t or self._DEVANAGARI.search(g):        # user already Devanagari
+                return t
+            if not self._DEVANAGARI.search(t):             # matched scripts
+                return t
+            latin = sum(1 for c in t if c.isascii() and c.isalpha())
+            deva = len(self._DEVANAGARI.findall(t))
+            if deva < 8 or latin > deva * 3:               # stray quotes/paths only
+                return t
+            return (t + "\n\n(script note: answer aaya Devanagari mein, tumhara "
+                    "sawal Roman/Hinglish tha — chat model ne script badal di. Bolo to "
+                    "Roman mein repeat kar doon.)")
+        except Exception:
+            return text
+
+    def _runtime_state_block(self, goal: str = "") -> str:
+        """LIVE runtime facts for agent prompts (v1.10.4).
+
+        Plan context deliberately excludes old task summaries (semantic memory
+        polluted plans), but that also excluded *runtime* state — so a follow-up
+        like 'server band kar do' had to guess. Live TUI: the worker stopped the
+        orphan :8131 left by an EARLIER session and reported success while the
+        user's actual :8132 server kept serving. Wrong-target is not a style
+        problem. These lines come from what a real tool printed in this
+        conversation, so the agent can only act on ports it can see.
+        """
+        try:
+            led = self._ledger()
+            facts: List[str] = []
+            for t in list(getattr(led, "_turns", []) or []):
+                for ev in (t.get("evidence") or []):
+                    op = str(getattr(ev, "operation", "") or "")
+                    if not _re.search(r"server|port", op, _re.I):
+                        continue
+                    body = str(getattr(ev, "observed", "") or "")
+                    for line in body.splitlines():
+                        ln = line.strip()
+                        if (ln.startswith("serving:") or ln.startswith("stopped:")
+                                or _re.search(r":\d{2,5}\s+(UP|DOWN|FREE|LISTENING)", ln, _re.I)):
+                            facts.append(f"{op} → {ln}"[:200])
+            proj = ""
+            try:
+                from ..core.ledger import current_project
+                proj = current_project() or ""
+            except Exception:
+                proj = ""
+            if proj:
+                facts.append(f"current project scope: {proj}")
+            if not facts:
+                return ""
+            uniq = list(dict.fromkeys(facts))[-8:]
+            block = ("### RUNTIME STATE (printed by the real tools in THIS conversation, "
+                     "not recalled from memory)\n" + "\n".join(f"- {f}" for f in uniq))
+            if _re.search(r"server|port\b|band|start|restart|host", goal or "", _re.I):
+                block += ("\nRULE for server operations: act only on ports shown ABOVE — never "
+                          "stop/start a port that is not listed there, never re-report a port from "
+                          "an earlier session, and never claim an action without calling the tool "
+                          "that proves it. If the user says 'the server' and exactly one port is "
+                          "UP, that is the one. Quote the tool output line as your evidence.")
+            return block
+        except Exception:
+            return ""
+
     def _run_task(self, task: Task, dag: TaskDAG, task_id: str, t0: float = None) -> None:
         agent_name = task.agent
         task_budget = float(self.config.get("autonomy.task_timeout_seconds", 180)) * \
             (1 + self.max_retries * 0.6)          # retries get a shrinking allowance
         t_task = time.time()
         context = self._dep_context(task, dag)
+        rt = self._runtime_state_block()
+        if rt:
+            context += "\n\n" + rt
         # v1.9.8 PROJECT MEMORY: builders see the existing project state
         existing_ctx = str(self.ctx.state.get("existing_project_ctx") or "")
         if existing_ctx and task.agent in ("coder", "worker"):
@@ -808,13 +1313,17 @@ class Orchestrator:
             if self.cancelled:
                 task.status = TaskStatus.SKIPPED
                 return
-                if attempt > 0 and time.time() - t_task > task_budget:
-                    self.ui.event("warn", f"{task.id}: time budget spent — not marking done")
-                    task.status = TaskStatus.FAILED
-                    task.error = task.error or "task time budget exceeded"
-                    task.score = max(task.score, 50.0)
-                    task.verdict = task.verdict or "fail"
-                    return
+            # v1.10.4 BUG-3 FIX: this guard used to sit *after* the `return`
+            # inside the cancelled-branch — i.e. it could never run, so a task
+            # with max_retries=2 could burn 3 full step budgets with no
+            # per-task cap (live: 10m43s / 112k tokens on one goal).
+            if attempt > 0 and time.time() - t_task > task_budget:
+                self.ui.event("warn", f"{task.id}: time budget spent — not marking done")
+                task.status = TaskStatus.FAILED
+                task.error = task.error or "task time budget exceeded"
+                task.score = max(task.score, 50.0)
+                task.verdict = task.verdict or "fail"
+                return
             task.attempts = attempt + 1
             # v1.8.1: the quick (cheap) coder must never handle hosting/verification
             # — live TUI run: host task (short desc) went to codestral-2508 which
@@ -844,6 +1353,18 @@ class Orchestrator:
             task.steps += len(outcome.steps)
             task.tokens += outcome.tokens
             task.output = outcome.output or task.output
+
+            # v1.10.4 §12: classify this outcome so the critic can be skipped
+            # for clean read-only work (and never for anything that mutated).
+            _WRITE_TOOLS = {"write_file", "edit_file", "delete_path", "move_path",
+                            "run_shell", "run_python", "install_package", "start_server",
+                            "stop_server", "git_add", "git_commit", "sqlite_exec",
+                            "make_pptx", "make_pdf", "make_docx", "remember",
+                            "index_knowledge", "browser_fill", "browser_click"}
+            tool_steps = [s for s in outcome.steps if s.kind == "tool"]
+            task.touched = any(s.tool in _WRITE_TOOLS for s in tool_steps)
+            task.clean_reads = (bool(tool_steps) and not task.touched
+                                and all(s.ok for s in tool_steps))
 
             # v1.8.1: deterministic insurance — a coding task that made ZERO tool
             # calls (live: host task answered empty / 'I cannot use tools') is failed
@@ -1003,9 +1524,24 @@ class Orchestrator:
 
     # ------------------------------------------------------------------
     def _should_verify(self, task: Task) -> bool:
+        """§12 CRITIC POLICY. The critic earns its 3-4s + ~5k tokens on work
+        that can actually be wrong in ways a tool cannot detect. It adds nothing
+        to a deterministic read-only query whose own success IS the evidence.
+
+        Skip when ALL of:
+          • the task is not code/research/hosting (those always verify)
+          • it made at least one tool call and NONE of its calls failed
+          • there is no explicit acceptance criterion the critic must check
+        """
         if self.config.get("autonomy.verify_all", True) is False:
             return False
-        return task.agent in ("coder", "researcher") or bool(task.acceptance)
+        risky = (task.agent in ("coder", "researcher") or bool(task.acceptance)
+                 or getattr(task, "touched", False) or _hosting_mandatory(task))
+        if risky:
+            return True
+        # pure read-only state query: every tool call succeeded, nothing was
+        # written, so there is no judgement left to make — the output IS proof.
+        return not getattr(task, "clean_reads", False)
 
     @staticmethod
     def _dep_context(task: Task, dag: TaskDAG) -> str:

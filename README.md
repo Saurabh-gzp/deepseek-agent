@@ -166,18 +166,23 @@ PLAN → DAG → ASSIGN → RUN SAFE TASKS IN PARALLEL → COLLECT
 ### Model roles (v1.5 — capability-aware)
 | Role | Model | Job |
 |---|---|---|
-| router (decider) | `ministral-8b-2512` | intent classification + capability routing (task_type / model_hint), trivial answers |
-| supervisor | `mistral-medium-latest` | planning, coordination, synthesis, per-task model pinning |
-| worker | `ministral-8b-2512` | general execution, data shaping, device queries |
+| router (decider) | `mistral-small-2603` | intent classification + capability routing (task_type / model_hint), trivial answers |
+| supervisor | `mistral-medium-2508` | planning, coordination, synthesis, per-task model pinning |
+| worker | `mistral-small-2603` | general execution, data shaping, device queries |
 | worker (deep) | `ministral-14b-2512` | worker fallback — extra reasoning when needed |
 | researcher | `mistral-small-2603` | web research, live info (weather/news/prices), citations |
 | coder (quick) | `codestral-2508` | small/single-file code edits, quick scripts |
 | coder (repo) | `devstral-2512` | full repository tasks, bug fixes, website/UI implementation |
-| critic | `mistral-medium-latest` | verification, scoring (tool-failure aware) |
-| hard fallback | `mistral-medium-2604` | difficult final checks (rate-limited to 1/task) |
+| critic | `mistral-medium-2508` | verification, scoring (tool-failure aware) |
+| hard fallback | `mistral-large-2512` | difficult final checks (rate-limited to 1/task) |
 | memory / RAG | `mistral-embed-2312` | embeddings |
-| documents | `mistral-ocr-latest` | PDF/image extraction |
+| vision | `pixtral-12b-2409` | `see_image` — reads actual pixels (not in /v1/models, still served) |
+| documents | `mistral-ocr-latest` | PDF/image extraction via /v1/ocr |
 | safety | `mistral-moderation-2603` | input/output moderation |
+
+> Models come from `config/config.yaml` → `models:` — that block is the source of truth;
+> this table mirrors v1.10.5.
+
 
 Every role has a fallback chain — see `config/config.yaml`. The supervisor can
 also pin an exact model per task (validated whitelist); the plan table shows it.
