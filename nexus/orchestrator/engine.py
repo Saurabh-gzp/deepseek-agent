@@ -741,27 +741,24 @@ class Orchestrator:
             # "restart the site on 8090" while 8090 already served that site ->
             # parachute died on ALREADY IN USE instead of accepting reality).
             try:
-                reg_p = getattr(self.ctx.shell, "root", None)
-                reg_name = getattr(self.ctx.shell, "_SERVER_REG", None)
-                if reg_p is not None and reg_name:
-                    import json as _j3
-                    rp = Path(reg_p) / reg_name
-                    if rp.exists() and str(port) in _j3.loads(
-                            rp.read_text(encoding="utf-8") or "{}"):
-                        import urllib.request as _ur
-                        with _ur.urlopen(f"http://127.0.0.1:{port}/",
-                                         timeout=3) as _resp:
-                            _body = _resp.read().decode("utf-8", "replace")
-                        if (not marker or marker in _body) and (
-                                m or rel_dir_serves(cmd, _body)):
-                            out = (f"[already-hosted] harness-tracked server on "
-                                   f"port {port} verified live (marker present).")
-                            self._server_evidence.append(out)
-                            self.ui.event("ok", f"{task.id}: hosting already live on {port}")
-                            task.output = (task.output or "") + "\n\n" + out
-                            return True
+                # v1.10.3 F9: if ANYTHING on the target port already serves the
+                # expected marker, hosting is DONE — accept it. (Registry-tracked
+                # OR not: live W3, the coder's process served the right site on
+                # 8093 but start_server refused ALREADY IN USE and the parachute
+                # burned 3 retries for a fact a single GET could prove.)
+                import urllib.request as _ur
+                with _ur.urlopen(f"http://127.0.0.1:{port}/", timeout=3) as _resp:
+                    _body = _resp.read().decode("utf-8", "replace")
+                if (not marker or marker in _body) and (
+                        "<html" in _body.lower() or "<!doctype" in _body.lower()):
+                    out = (f"[already-hosted] port {port} verified live, marker "
+                           f"{marker!r} present in response.")
+                    self._server_evidence.append(out)
+                    self.ui.event("ok", f"{task.id}: hosting already live on {port}")
+                    task.output = (task.output or "") + "\n\n" + out
+                    return True
             except Exception:
-                pass  # fall through to a real start_server attempt
+                pass  # nothing live on the port -> real start_server attempt below
             r = self.ctx.shell.start_server(command=cmd, port=port, marker=marker,
                                             name="nexus-parachute")
             if not r.ok and "marker" in (r.error or "") and not m:

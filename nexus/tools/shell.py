@@ -251,6 +251,15 @@ class ShellTools:
 
     def run_python(self, code: str, timeout: int = 0) -> ToolResult:
         """NEVER raises. Any exception becomes a ToolResult error."""
+        # v1.10.3 F8: parity with the shell serve-block (live W3: the coder
+        # bypassed F7 by spawning http.server from Python via subprocess).
+        for pat in ("http.server", "SimpleHTTPServer", "HTTPServer",
+                    "TCPServer", "socketserver", "php -S", "httpd"):
+            if pat in code:
+                return ToolResult(False, error=(
+                    "server-start blocked by python policy: run_python must "
+                    f"not spawn listeners ('{pat}' found). Use the start_server "
+                    "tool — it verifies the marker and stays stoppable."))
         try:
             return self._run_python(code, timeout)
         except Exception as e:  # noqa: BLE001
