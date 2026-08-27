@@ -266,9 +266,16 @@ class BrowserTools:
             return ToolResult(True, output=out + "\n\n" + _describe_page(page, 3000))
         return _wrap(do)
 
-    def snapshot(self, path: str = "screenshots/page.png", full_page: bool = False, **kw) -> ToolResult:
+    def snapshot(self, path: str = "screenshots/page.png", full_page: bool = False,
+                 width: int = 0, height: int = 0, **kw) -> ToolResult:
         def do():
             page = _current_session().page()
+            # v1.10.0: optional viewport override so the agent can prove
+            # responsive behaviour (mobile 390px vs desktop 1280px) with real
+            # rendered screenshots instead of guessing from CSS.
+            if width and int(width) > 0:
+                page.set_viewport_size({"width": int(width),
+                                        "height": int(height) if int(height) > 0 else 900})
             # v1.9.9 B2 FIX: sandbox EVERY resolved path inside the workspace —
             # absolute paths and ../ traversal previously escaped the sandbox.
             raw = Path(path)
@@ -284,8 +291,9 @@ class BrowserTools:
                 loc = str(rel)
             except Exception:
                 loc = str(p)
+            vw = page.viewport_size
             return ToolResult(True, output=f"screenshot saved (workspace-relative): {loc} "
-                                           f"({p.stat().st_size} bytes)")
+                                           f"({p.stat().st_size} bytes, viewport {vw.get('width')}x{vw.get('height')})")
         return _wrap(do)
 
     def content(self, max_chars: int = _MAX_TEXT, selector: str = "body", **kw) -> ToolResult:
@@ -355,7 +363,7 @@ class BrowserTools:
                 "Save a PNG screenshot of the current page as visual evidence "
                 "(e.g. screenshots/login-step2.png).",
                 {"type": "object", "properties": {
-                    "path": S, "full_page": B}, "required": []},
+                    "path": S, "full_page": B, "width": {"type": "integer", "description": "optional viewport width for responsive proof (e.g. 390 mobile, 1280 desktop)"}, "height": {"type": "integer"}}, "required": []},
                 self.snapshot, Risk.READ_ONLY, agents=common)
         reg.add("browser_eval",
                 "Run JavaScript in the current page (document.title, localStorage, "

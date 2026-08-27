@@ -34,6 +34,7 @@ class Skill:
     version: str = "1.0"
     body: str = ""
     loaded: bool = False
+    max_body: int = 0
 
     def load(self) -> str:
         if not self.loaded:
@@ -92,12 +93,19 @@ class SkillLibrary:
         for p in sorted(self.dir.rglob("*.md")):
             if p.name.upper() in ("README.MD",):
                 continue
+            # v1.10.0: bundle reference dirs are material, not skills
+            if p.parent.name in ("references", "reference", "assets"):
+                continue
             try:
                 head = p.read_text(encoding="utf-8", errors="ignore")[:2500]
             except Exception:
                 continue
             fm = _parse_frontmatter(head)
             rel = p.relative_to(self.dir)
+            # v1.10.0: bundle dir <cat>/<name>/<name>.md (or SKILL.md) IS the
+            # skill <cat>/<name> — don't duplicate the dirname in the id.
+            if p.stem == "SKILL" or p.stem == p.parent.name:
+                rel = p.parent.relative_to(self.dir)
             sid = str(rel.with_suffix("")).replace("\\", "/")
             desc = str(fm.get("description") or _first_line(head) or sid)
             self.skills[sid] = Skill(
@@ -109,6 +117,7 @@ class SkillLibrary:
                 tags=list(fm.get("tags") or []),
                 agents=list(fm.get("agents") or ["*"]),
                 version=str(fm.get("version", "1.0")),
+                max_body=int(fm.get("max-body-chars") or 0),
             )
         return len(self.skills)
 
@@ -141,15 +150,30 @@ class SkillLibrary:
         return None
 
     def search(self, query: str, limit: int = 3) -> List[Skill]:
-        q = set(re.findall(r"[a-z0-9]+", query.lower()))
+        # v1.10.0: weighted retrieval. The old raw token-overlap ranked by
+        # junk ('a' matched any prose) and broke ties alphabetically, so
+        # "Build a fintech dashboard" surfaced termux_environment instead of
+        # the UI skill. Now: 2-char tokens only match explicit tags (so 'ui'
+        # and 'ux' trigger their skill but prose junk like 'it'/'on' can't),
+        # tag/name hits count double, ties break by id for determinism.
+        toks = [t for t in re.findall(r"[a-z0-9]+", query.lower()) if len(t) >= 2]
+        if not toks:
+            return []
         scored = []
         for s in self.skills.values():
             hay = set(re.findall(r"[a-z0-9]+",
                                  f"{s.id} {s.name} {s.description} {' '.join(s.tags)}".lower()))
-            overlap = len(q & hay)
-            if overlap:
-                scored.append((overlap / (len(q) or 1), s))
-        scored.sort(key=lambda x: -x[0])
+            strong = set(re.findall(r"[a-z0-9]+",
+                                    f"{s.name} {' '.join(s.tags)}".lower()))
+            score = 0.0
+            for t in set(toks):
+                if t in strong:
+                    score += 2.0
+                elif len(t) >= 3 and t in hay:
+                    score += 1.0
+            if score:
+                scored.append((score / (len(toks) ** 0.5), s))
+        scored.sort(key=lambda x: (-x[0], x[1].id))
         return [s for _, s in scored[:limit]]
 
     def load_body(self, skill_id: str, max_chars: int = 12000) -> str:
@@ -157,12 +181,18 @@ class SkillLibrary:
         if not s:
             avail = ", ".join(sorted(self.skills)[:25])
             return f"Skill '{skill_id}' not found. Available: {avail}"
+        cap = s.max_body or max_chars
         body = s.load()
+        # v1.10.0: bundled skills reference their own scripts/data — give them
+        # a portable ${SKILL_DIR} the loader resolves to the real directory.
+        sdir = str(s.path.parent.resolve())
+        body = body.replace("${SKILL_DIR}", sdir)
         refs = self._refs(s)
         head = f"# SKILL: {s.name} ({s.id})\n"
+        head += f"_Skill directory: `{sdir}`_\n"
         if refs:
             head += f"_Reference files available (use read_file): {', '.join(refs)}_\n\n"
-        return head + body[:max_chars]
+        return head + body[:cap]
 
     def _refs(self, skill: Skill) -> List[str]:
         d = skill.path.parent / f"{skill.path.stem}_refs"

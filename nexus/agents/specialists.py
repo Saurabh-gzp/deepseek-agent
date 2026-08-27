@@ -261,7 +261,17 @@ class SupervisorAgent(BaseAgent):
         "arithmetic.' — never plan file-creating tasks for pure questions (live waste: a simple "
         "math+trivia question produced a markdown file and 50k tokens).\n"
         "- Every task needs an objective acceptance criterion (file exists, tests pass, etc.).\n"
-        "- Reference a skill_id when a matching playbook exists."
+        "- UI/UX INTELLIGENCE (mandatory for visual goals): a task that builds, redesigns or "
+        "styles a website, landing page, dashboard, web-app UI, or components MUST get "
+        "\"skill\": \"web_development/ui_ux_pro_max\" and its description MUST begin: "
+        "'FIRST call load_skill(\"web_development/ui_ux_pro_max\") and run its bundled "
+        "search.py --design-system for <product/industry/keywords>; write the chosen "
+        "style/palette/typography/spacing into projects/<slug>/DESIGN.md' — then implement "
+        "using THOSE exact tokens (never invent colors/fonts the search did not justify). "
+        "The verify task MUST browser_navigate + browser_screenshot BOTH desktop (width=1280) "
+        "AND mobile (width=390) and LOOK at both PNGs; claims like 'responsive works' without "
+        "rendered screenshots at both widths FAIL the critic.\n"
+"- Reference a skill_id when a matching playbook exists."
     )
 
     def plan(self, goal: str, context: str = "", failure_note: str = "") -> Dict[str, Any]:
