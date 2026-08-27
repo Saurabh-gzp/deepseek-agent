@@ -937,9 +937,13 @@ class Orchestrator:
                 if verdict.get("verdict") == "pass":
                     task.status = TaskStatus.DONE
                     return
-                if verdict.get("verdict") == "partial" and task.score >= 60 and attempt >= self.max_retries:
-                    # borderline-accept: work is mostly right, but FINAL must
-                    # still show 'partial' — no fake DONE (live bug #5)
+                if verdict.get("verdict") == "partial" and task.score >= 85 and attempt >= self.max_retries:
+                    # v1.10.1 F5: borderline-accept now requires >=85. The critic
+                    # caps partial scores at 79, so a partial at retries-exhausted
+                    # falls through to an honest FAILED below. Live bug (W1): a
+                    # verify task that never produced its required screenshots
+                    # was accepted as DONE at partial 70 — the acceptance was
+                    # unmet but the run reported the site "fully implemented".
                     task.status = TaskStatus.DONE
                     task.verdict = "partial"
                     return

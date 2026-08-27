@@ -14,7 +14,12 @@ def url_blocked(url: str) -> str:
     host = (u.hostname or "").strip().lower()
     if not host:
         return "blocked: empty host"
-    if host in {"localhost", "metadata.google.internal", "metadata"}:
+    # v1.10.1 F6: loopback is IN the trust boundary (same policy as the shell
+    # network guard): the agent can already curl its own machine, and blocking
+    # the browser here forced run_shell/playwright workarounds (live W1: the
+    # agent could not screenshot its own site through the sanctioned tool).
+    # Metadata/link-local/RFC1918 stay hard-blocked below.
+    if host in {"metadata.google.internal", "metadata"}:
         return f"blocked host: {host}"
     if host.endswith(".internal") or host.endswith(".local"):
         return f"blocked host: {host}"
@@ -28,14 +33,20 @@ def url_blocked(url: str) -> str:
             ip = ipaddress.ip_address(ip_s)
         except ValueError:
             continue
+        # v1.10.1 F6: loopback entirely in trust boundary (note ::1 also
+        # reports is_reserved=True on CPython, so the exemption comes FIRST).
+        if ip.is_loopback:
+            continue
         # is_site_local was removed in Python 3.13 — do not call it.
         site_local = bool(getattr(ip, "is_site_local", False))
         if (
-            ip.is_private or ip.is_loopback or ip.is_link_local
+            ip.is_link_local
             or ip.is_multicast or ip.is_reserved or ip.is_unspecified
             or site_local
         ):
             return f"blocked address: {ip}"
+        if ip.is_private and not ip.is_loopback:
+            return f"blocked private address: {ip}"
         if ip_s.startswith("169.254."):
             return f"blocked metadata: {ip}"
     return ""

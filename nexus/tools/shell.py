@@ -75,6 +75,18 @@ def _host_blocked_for_shell(host: str) -> str:
 
 
 def _shell_network_guard(command: str) -> str:
+    # v1.10.1 F7: servers must go through the start_server tool — a run_shell
+    # "python3 -m http.server" is UNTRACKED: the registry never learns it, the
+    # hosting parachute cannot verify it, and stop_server cannot stop it
+    # (live W1: coder nohup'd http.server, then every start_server retry died
+    # on ALREADY IN USE). Bind-a-port commands are rejected with guidance.
+    for pat in ("http.server", "SimpleHTTPServer", "php -S", "busybox httpd",
+                "python3 -m ftp.server", "nc -l", "ncat -l"):
+        if pat in command:
+            return ("server-start blocked by shell policy: run_shell must not "
+                    f"spawn listeners ('{pat}' detected). Use the start_server "
+                    "tool instead — it verifies the marker and stays stoppable.")
+
     """Return a block-reason if the command targets a forbidden network host."""
     reasons = []
     for m in _NET_GUARD_URL.finditer(command or ""):
