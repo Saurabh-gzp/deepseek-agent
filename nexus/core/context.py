@@ -56,6 +56,14 @@ class AgentContext:
         self.gitops.register(self.tools)
         self.vision = VisionTools(config.workspace, self.llm.ask)
         self.vision.register(self.tools, llm=self.llm)
+        # v1.9.8: real browser automation (playwright) — registers only when
+        # playwright is importable, so Termux installs keep working unchanged.
+        try:
+            from ..tools.browser import BrowserTools
+            self.browser = BrowserTools(config.workspace)
+            self.browser.register(self.tools)
+        except Exception:
+            self.browser = None
         self._register_meta_tools()
 
         # --- safety --------------------------------------------------------

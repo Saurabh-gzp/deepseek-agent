@@ -1,11 +1,14 @@
 """Shell + Python execution tools (Termux-aware, guarded)."""
 from __future__ import annotations
 
+import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import List, Optional
 
@@ -534,13 +537,89 @@ class ShellTools:
             return ToolResult(False, error=(
                 f"server up on :{port} but marker {marker!r} NOT found in "
                 f"{path} (content mismatch) — first 200 chars: {body[:200]!r}"))
+        self._remember_server(port, proc.pid)
         out = (f"Server RUNNING (pid {proc.pid}) at http://127.0.0.1:{port}{path}"
                + (f"\nname: {name}" if name else "")
                + f"\nverified: HTTP 200, {len(body)} bytes fetched"
                + (f", marker {marker!r} found" if marker else "")
-               + "\nThe server stays up — this call did NOT kill it.")
+               + "\nThe server stays up — stop it later with stop_server(port="
+               + str(port) + ").")
         return ToolResult(True, output=out,
                           data={"pid": proc.pid, "port": port, "url": url})
+
+    # ------------------------------------------------------------------
+    _SERVER_REG = ".nexus/servers.json"
+
+    def _remember_server(self, port: int, pid: int) -> None:
+        """Track harness-started servers so stop_server can find them later."""
+        try:
+            reg = self.root / self._SERVER_REG
+            data: dict = {}
+            if reg.exists():
+                data = json.loads(reg.read_text(encoding="utf-8") or "{}")
+            data[str(port)] = {"pid": int(pid), "started": time.time()}
+            reg.parent.mkdir(parents=True, exist_ok=True)
+            reg.write_text(json.dumps(data), encoding="utf-8")
+        except Exception:
+            pass
+
+    def stop_server(self, port: int = 0, pid: int = 0, **kwargs) -> ToolResult:
+        """Stop a server previously started by start_server (by port or pid)."""
+        import signal
+        port = int(port or 0)
+        pid = int(pid or 0)
+        if not pid:
+            reg = self.root / self._SERVER_REG
+            if reg.exists():
+                try:
+                    data = json.loads(reg.read_text(encoding="utf-8") or "{}")
+                    if str(port) in data:
+                        pid = int(data[str(port)].get("pid") or 0)
+                except Exception:
+                    pass
+        if not pid:
+            return ToolResult(False, error=(
+                f"No tracked server for port {port}. Pass pid= explicitly, or "
+                "only servers started via start_server can be stopped by port."))
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except Exception as e:
+            return ToolResult(False, error=f"stop_server could not signal pid {pid}: {e}")
+        # wait for the port to actually close (or the process to die)
+        t_end = time.time() + 5
+        while time.time() < t_end:
+            alive = False
+            try:
+                os.kill(pid, 0)          # signal 0 = existence check
+                alive = True
+            except OSError:
+                alive = False
+            bound = False
+            if port:
+                s = socket.socket()
+                try:
+                    s.bind(("127.0.0.1", port))
+                except OSError:
+                    bound = True          # still bound
+                finally:
+                    s.close()
+            if not alive and (not port or not bound):
+                break
+            time.sleep(0.3)
+        # clean the registry entry
+        try:
+            reg = self.root / self._SERVER_REG
+            if reg.exists() and port:
+                data = json.loads(reg.read_text(encoding="utf-8") or "{}")
+                data.pop(str(port), None)
+                reg.write_text(json.dumps(data), encoding="utf-8")
+        except Exception:
+            pass
+        return ToolResult(True, output=(
+            f"Server STOPPED (pid {pid}" + (f", port {port}" if port else "") +
+            "). Verified: process gone" + (", port free" if port else "") + "."))
 
     # ------------------------------------------------------------------
     def register(self, reg: ToolRegistry) -> None:
@@ -578,6 +657,16 @@ class ShellTools:
                     "name": {"type": "string"}, "wait": {"type": "integer"}},
                  "required": []},
                 self.start_server, Risk.EXECUTE,
+                agents=["supervisor", "coder", "worker", "solo"])
+        reg.add("stop_server",
+                "Stop a server that start_server launched (cleanup). Pass port= "
+                "(the port you started it on) or pid= from its output. Verifies the "
+                "process is gone and the port is free. ALWAYS call this when a task "
+                "says to stop/shut down a server after verifying it.",
+                {"type": "object", "properties": {
+                    "port": {"type": "integer"}, "pid": {"type": "integer"}},
+                 "required": []},
+                self.stop_server, Risk.EXECUTE,
                 agents=["supervisor", "coder", "worker", "solo"])
         reg.add("device_info",
                 "One-shot, CORRECT device report: storage (Termux paths), battery, network, "

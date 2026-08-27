@@ -34,7 +34,9 @@ ACTION_VERB = _re.compile(
     r"search|research|google|lookup|look\s*up|find|fetch)\b", _re.I)
 DIRECT_SAFE_INTENTS = {"chat", "question"}
 ACTION_CLAIM = _re.compile(
-    r"\b(deleted|removed|created|wrote|built|saved|i\s?have|i've|done)\b", _re.I)
+    r"\b(i\s+(?:have|ve|had|just)\s+\w+ed|"
+    r"i\s+(?:deleted|removed|created|wrote|built|saved|fixed|made|ran|edited)\b|"
+    r"i'?ve\s+(?:deleted|removed|created|wrote|built|saved|fixed|made|ran|edited))", _re.I)
 # Device/system questions — the router used to answer "no access" even
 # though system_info/termux-api can actually check them.
 IMAGE_PATH_RE = _re.compile(
@@ -94,10 +96,19 @@ MATH_EXPR = _re.compile(r"^[\s\d+\-*/×÷%^().,]+$")
 MATH_HAS_OP = _re.compile(r"[\d)]\s*[+\-*/×÷^]\s*[\d(]")
 # v1.8.1: tasks that mention these concern hosting/verification — they need the
 # full coder (start_server etc.), never the cheap quick-coder path.
+# v1.9.8 REWRITTEN: the old pattern matched bare words like "curl"/"localhost"/"deploy",
+# so ANY analysis/automation task that mentioned curl was misread as a HOSTING task and
+# failed forever on "no verified start_server call" (live: login-flow analysis burned
+# 5m46s + 230k tokens on a hosting check it could never satisfy). Real hosting intent =
+# an explicit serving tool/command, or host/serve/deploy DIRECTLY next to a deliverable.
 _QUICK_BLOCK = _re.compile(
-    r"\b(host|hosting|http\.server|start_server|localhost|deploy|"
-    r"live (site|url)|curl\b)\b",
-    _re.IGNORECASE)
+    r"(?is)\b(?:"
+    r"http\.server|start_server|"
+    r"(?:localhost|127\.0\.0\.1):\d+|"
+    r"(?:host|hosting|serve|serving|deploy|deploying|publish|publishing)\s+"
+    r"(?:the\s+|this\s+|it\s+|my\s+|a\s+)?"
+    r"(?:site|website|page|web\s?app|app|server|portfolio|landing|dashboard|frontend|url)"
+    r")\b")
 # v1.8.3: explicit hosting spec the supervisor writes into host-task descriptions
 _START_SERVER_SPEC = _re.compile(
     r"start_server\(\s*command\s*=\s*['\"]([^'\"]+)['\"][^)]*?port\s*=\s*(\d+)"
@@ -120,6 +131,35 @@ def quick_math(goal: str) -> Optional[str]:
         pretty = f"{val:,}" if isinstance(val, int) else f"{val:,.6f}".rstrip("0").rstrip(".")
         return f"{goal.strip()} = **{pretty}**\n\n(calculated locally, exact — no AI guessing)"
     return None
+
+
+_MATH_SUB = _re.compile(r"\d[\d,\s]*(?:[.]\d+)?(?:\s*[+\-*/×÷^%]\s*\d[\d,\s]*(?:[.]\d+)?)+")
+
+
+def precompute_math(goal: str) -> str:
+    """Deterministically evaluate arithmetic embedded in a mixed question.
+
+    Live (v1.9.8): 'what is 17*23 and who wrote Python?' went through a full
+    2-task DAG because the router is told to never do arithmetic. Here the
+    arithmetic is solved locally FIRST and the goal is rewritten with the exact
+    result substituted in — the router then only answers the knowledge parts.
+    """
+    def _sub(m: "_re.Match") -> str:
+        src = m.group(0)
+        trailing = src[len(src.rstrip()):]          # keep trailing whitespace
+        expr = src.strip().replace(",", "").replace("×", "*").replace("÷", "/").replace("^", "**")
+        try:
+            val = eval(expr, {"__builtins__": {}}, {})  # noqa: S307 — digits/operators only
+        except Exception:
+            return src
+        if isinstance(val, float) and val.is_integer():
+            val = int(val)
+        pretty = f"{val:,}" if isinstance(val, int) else f"{val:,.6f}".rstrip("0").rstrip(".")
+        return pretty + trailing
+
+    if not MATH_HAS_OP.search(goal):
+        return goal
+    return _MATH_SUB.sub(_sub, goal)
 
 
 def looks_like_noise(goal: str) -> bool:
@@ -305,6 +345,12 @@ class Orchestrator:
         # ---- ROUTE
         self.ui.phase("ROUTE", "classifying request")
         tok0 = self.ctx.llm.stats.snapshot().get("total_tokens", 0)
+        # v1.9.8: solve any embedded arithmetic locally, exactly, BEFORE routing
+        # (router is forbidden from doing math, so mixed math+trivia questions
+        #  no longer need a DAG just because one part is arithmetic)
+        route_goal = precompute_math(goal)
+        if route_goal != goal:
+            self.ui.event("ok", f"arithmetic solved locally: {goal!r} → {route_goal!r}")
         # greeting / very short input => do NOT give the router memory context
         if GREETING_RE.match(goal) or len(goal.split()) < 3:
             rctx = ""
@@ -312,8 +358,11 @@ class Orchestrator:
             rctx = mem_ctx[-1200:]
         else:
             rctx = ""
-        decision = self.router.route(goal, rctx)
-        decision, overridden = router_guard(goal, decision)
+        decision = self.router.route(route_goal, rctx)
+        # v1.9.8: guard against the PRECOMPUTED goal too — the original goal still
+        # contains raw arithmetic ('17*23') and MATH_HAS_OP would force a full DAG
+        # even though the math is already solved exactly at this point.
+        decision, overridden = router_guard(route_goal, decision)
         if overridden:
             self.ui.event("warn", "router override → supervisor "
                           "(action requests cannot be answered without doing them)")
@@ -349,6 +398,14 @@ class Orchestrator:
                          f"- model_hint: {decision.get('model_hint', '')}\n"
                          "- Assign tasks to the agent class that matches model_hint, "
                          "following the MODEL CAPABILITY TABLE below.")
+        # v1.9.8 PROJECT MEMORY: existing-project state steers the plan
+        existing_ctx = self._existing_project_context(goal)
+        if existing_ctx:
+            plan_ctx += ("\n\n" + existing_ctx[:2600]
+                         + "\nPlan follow-up tasks that EDIT this project â "
+                           "never recreate it.")
+            self.ui.event("ok", "project memory: continuing existing project "
+                                "(context injected into the plan)")
         plan = self.supervisor.plan(goal, plan_ctx)
         report.plan = plan
         dag = TaskDAG.from_plan(plan)
@@ -658,6 +715,12 @@ class Orchestrator:
             (1 + self.max_retries * 0.6)          # retries get a shrinking allowance
         t_task = time.time()
         context = self._dep_context(task, dag)
+        # v1.9.8 PROJECT MEMORY: builders see the existing project state
+        existing_ctx = str(self.ctx.state.get("existing_project_ctx") or "")
+        if existing_ctx and task.agent in ("coder", "worker"):
+            context += ("\n\n" + existing_ctx[:2000]
+                        + "\nYou are EXTENDING this existing project â read its files "
+                          "first (list_dir + read_file), then edit in place.")
         if task.skill:
             context += (f"\n\nRECOMMENDED SKILL: `{task.skill}` — call "
                         f"load_skill('{task.skill}') first and follow it.")
@@ -776,12 +839,19 @@ class Orchestrator:
                 # Deterministic insurance: a task whose tool calls ERRORS can never be
                 # certified 100-pass out of the box — the critic must justify it.
                 # (Live bug: storage task with 5 failed `du` runs still scored 100.0)
+                # v1.9.8: BUT a conscious 'pass' with NO issues and NO fix note means
+                # the critic re-verified the affected data itself — accept it. This
+                # stops the old behaviour of infinitely downgrading sandbox-blocked
+                # but otherwise complete tasks and burning retries on nothing.
                 if failed_ops and verdict.get("verdict") == "pass":
-                    verdict["verdict"] = "partial"
-                    verdict["score"] = min(float(verdict.get("score", 70)), 79.0)
-                    verdict.setdefault("issues", []).insert(
-                        0, f"{len(failed_ops)} tool call(s) failed during the task; "
-                           f"verify the data is complete despite them: {failed_ops[0][:80]}")
+                    justified = (not (verdict.get("issues") or [])
+                                 and not str(verdict.get("fix_instructions") or "").strip())
+                    if not justified:
+                        verdict["verdict"] = "partial"
+                        verdict["score"] = min(float(verdict.get("score", 70)), 79.0)
+                        verdict.setdefault("issues", []).insert(
+                            0, f"{len(failed_ops)} tool call(s) failed during the task; "
+                               f"verify the data is complete despite them: {failed_ops[0][:80]}")
                 task.score = float(verdict.get("score", 0))
                 task.verdict = verdict.get("verdict", "")
                 self.ui.verdict(task, verdict)
@@ -804,7 +874,25 @@ class Orchestrator:
                        "; ".join(str(i) for i in verdict.get("issues", []) if i))
                 actionable = bool(fix.strip()) and "not parseable" not in fix
                 if attempt < self.max_retries and actionable:
-                    context += f"\n\nCRITIC REJECTED THE PREVIOUS ATTEMPT. Fix these: {fix}"
+                    # v1.9.8 ANTI-LOOP: if the failures were sandbox/environment
+                    # blocks, hammering the same path again can never succeed —
+                    # order a full approach change instead of a blind retry.
+                    blocked = any(_re.search(
+                        r"outside (the )?workspace|sandbox|BLOCKED|permission",
+                        f, _re.I) for f in failed_ops)
+                    if blocked:
+                        context += (
+                            f"\n\nCRITIC REJECTED ATTEMPT {attempt + 1}. Fix these: {fix}\n"
+                            f"CRITICAL APPROACH CHANGE REQUIRED: your previous attempt(s) hit "
+                            f"SANDBOX BLOCKS. You can NEVER read/write/delete anything outside "
+                            f"the workspace directory ({self.config.workspace}). STOP retrying "
+                            f"those paths. Redo the work with workspace-RELATIVE paths only "
+                            f"(e.g. data.json or projects/<slug>/data.json INSIDE the workspace)."
+                        )
+                    else:
+                        context += (f"\n\nCRITIC REJECTED THE PREVIOUS ATTEMPT. Fix these: {fix}\n"
+                                    "IMPORTANT: do NOT repeat the same steps — change what you "
+                                    "did so the fix actually lands.")
                     self.ui.event("retry", f"{task.id} rejected by critic — retry {attempt + 2}")
                     continue
                 if not actionable:
@@ -874,6 +962,87 @@ class Orchestrator:
                               f"{t.id} reassigned worker → coder "
                               f"(design/code work needs coder models)")
 
+    _PROJ_STOP = {"the", "a", "an", "me", "my", "in", "to", "of", "and", "is",
+                  "it", "this", "that", "karo", "kar", "kr", "karna", "kar de",
+                  "mein", "hi", "ek", "do", "aur", "bhi", "wala", "same",
+                  "add", "update", "fix", "project", "please", "existing",
+                  "into", "for", "with", "use", "using", "make", "create",
+                  "build", "only", "now"}
+
+    def _match_existing_project(self, goal: str) -> str:
+        """Deterministically match a goal to an EXISTING projects/<slug>/ dir.
+        Score = overlap between the goal's content words and the slug's words.
+        >= 2 word overlap counts as the same project (user follow-up). Ties
+        prefer the SHORTEST slug (fewest stray words)."""
+        try:
+            ws = Path(self.config.workspace) / "projects"
+            if not ws.exists():
+                return ""
+            gwords = set(_re.sub(r"[^a-z0-9\s]", " ", (goal or "").lower()).split())
+            gwords -= self._PROJ_STOP
+            best, best_score = "", 0
+            for d in sorted(ws.iterdir()):
+                if not d.is_dir():
+                    continue
+                slug_words = set(d.name.lower().replace("-", " ").split())
+                overlap = len(slug_words & gwords)
+                if f"projects/{d.name}" in (goal or "").lower():
+                    overlap += 10
+                if overlap > best_score or (overlap == best_score
+                                            and best and len(d.name) < len(best)):
+                    best, best_score = d.name, overlap
+            return best if best_score >= 2 else ""
+        except Exception:
+            return ""
+
+    def _existing_project_context(self, goal: str) -> str:
+        """v1.9.8 PROJECT MEMORY (user-reported kami: a follow-up task in the SAME
+        project made the agent forget everything it had built — it re-planned from
+        scratch / duplicated folders). If the goal references an existing
+        projects/<slug>/ folder, inject its REAL state (files, TASKS.md, recent
+        activity) into the planning context so the team builds ON the project."""
+        try:
+            ws = Path(self.config.workspace) / "projects"
+            if not ws.exists():
+                return ""
+            best = self._match_existing_project(goal)
+            best_score = 2 if best else 0
+            if not best:
+                return ""
+            pdir = ws / best
+            files = sorted(p for p in pdir.rglob("*")
+                           if p.is_file() and "__pycache__" not in p.parts)[:25]
+            tree = "\n".join(f"  {f.relative_to(self.config.workspace)}"
+                             for f in files) or "  (empty)"
+            tasks_md = ""
+            tm = pdir / "TASKS.md"
+            if tm.exists():
+                tasks_md = tm.read_text(encoding="utf-8", errors="replace")[:1200]
+            readme = ""
+            rm = pdir / "README.md"
+            if rm.exists():
+                readme = rm.read_text(encoding="utf-8", errors="replace")[:400]
+            recent = sorted(files, key=lambda f: f.stat().st_mtime, reverse=True)[:3]
+            recent_s = ", ".join(f.name for f in recent) or "-"
+            block = (
+                f"### EXISTING PROJECT DETECTED: projects/{best}/ (score {best_score})\n"
+                f"THIS PROJECT ALREADY EXISTS with real work inside it. Files:\n{tree}\n"
+                + (f"TASKS.md (previous plan/progress):\n{tasks_md}\n" if tasks_md else "")
+                + (f"README.md excerpt: {readme}\n" if readme else "")
+                + f"Most recently modified: {recent_s}\n"
+                "RULES FOR FOLLOW-UP WORK:\n"
+                f"- Do NOT create a new/parallel project folder â build inside "
+                f"projects/{best}/.\n"
+                "- FIRST task: read the existing key files (TASKS.md, README, main "
+                "source files) to learn what was already built.\n"
+                "- EDIT/EXTEND the existing code in place. Never rewrite from scratch "
+                "what already exists and works.\n"
+                "- Reuse existing naming, structure and conventions.")
+            self.ctx.state["existing_project_ctx"] = block
+            return block
+        except Exception:
+            return ""
+
     def _apply_project_scope(self, goal: str, plan: Dict[str, Any], dag) -> None:
         """Every build-goal gets its own project folder so the workspace
         never gets cluttered (user feedback: 'a new project would mix
@@ -892,6 +1061,19 @@ class Orchestrator:
         gm = _re.search(r"projects/([A-Za-z0-9_-]+)", goal)
         slug = (gm.group(1).strip().lower() if gm else
                 str(plan.get("project") or "").strip().lower().replace(" ", "-"))
+        # v1.9.8 HARD PROJECT MEMORY: if the goal is follow-up work on an existing
+        # project, the EXISTING folder wins over any slug the plan invented.
+        # (Live: 'calculator app me power add karo' -> supervisor slugged
+        #  calculator-app-ek and built a PARALLEL copy instead of editing the
+        #  original — user-reported kami. Prompts alone were not enough.)
+        if not gm:
+            existing = self._match_existing_project(goal)
+            if existing and slug.replace("projects/", "") != existing:
+                if slug:
+                    self.ui.event("warn", f"project memory: plan wanted projects/{slug} "
+                                          f"— forcing EXISTING projects/{existing} "
+                                          "(follow-up on previous work)")
+                slug = existing
         creates = any(t.agent in ("worker", "coder") for t in dag.order())
         if not slug and creates and self.CREATE_Y.search(goal):
             words = [w for w in _re.sub(r"[^a-z0-9\s]", " ", goal.lower()).split()
