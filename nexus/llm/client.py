@@ -116,6 +116,13 @@ class LLMClient:
         chain = [model] if model else self.config.model_chain(role)
         params = {**self.config.gen_params(role), **overrides}
         last_err: Optional[Exception] = None
+        # v1.10.2 BUG-W2b: hard wall-clock budget for ONE ask across the whole
+        # model/provider chain. The per-model limiter can legally sleep 60s per
+        # slot; with every key penalised (429 storms after long runs) the chain
+        # walked slowly enough that a REPLAN call hung the run for 10+ minutes
+        # (live W1+W2). 240s bounds any single ask; callers see a normal
+        # exception and the engine fails honestly instead of hanging.
+        deadline = time.time() + 240.0
 
         for provider_name in self.registry.order():
             try:
@@ -132,6 +139,9 @@ class LLMClient:
                 if idx > 0 and self._is_large(m) and not self._allow_large(task_id):
                     self.notify("warn", f"Large-model budget exhausted, skipping {m}")
                     continue
+                if time.time() > deadline:
+                    raise RuntimeError(
+                        f"model pool exhausted (wall-clock budget 240s) for role '{role}'")
                 self.limiter.wait(m, self.config.rate_limit(m))
                 try:
                     res = provider.chat(m, messages, tools=tools, **params)

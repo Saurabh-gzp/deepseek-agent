@@ -476,6 +476,12 @@ class Orchestrator:
             if looks_like_noise(goal):
                 self.ui.event("warn", "short/unclear goal — stop instead of inventing a new project")
                 break
+            # v1.10.2 BUG-W2: the replan LLM call sits BETWEEN task-boundary
+            # deadline checks — with a rate-limited key it retried/backoff-slept
+            # forever and the run hung far past overall_timeout (live W1 x2).
+            if t0 and time.time() - t0 > self.overall_timeout:
+                self.ui.event("warn", "overall timeout reached — not replanning further")
+                break
             replan_ctx = (
                 f"USER GOAL (do not change, do not invent a different project): {goal}\n"
                 "If this goal is a single unknown word, ask the user — do NOT build a website."
