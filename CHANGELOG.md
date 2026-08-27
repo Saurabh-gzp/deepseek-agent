@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.10.5] — the last four real gaps, closed (host fast-path, registry TTL, recap cost, script drift)
+## [1.10.5] — closing the last measured gaps (host fast-path, registry TTL, recap cost, script drift) and a `start_server` permission bug
 
 Found by continuing to drive the **live TUI** after the 1.10.4 pass; each item was
 re-produced, fixed and re-tested there (plus an offline probe where a run would cost
