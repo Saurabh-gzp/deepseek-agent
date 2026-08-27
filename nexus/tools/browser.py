@@ -13,6 +13,9 @@ from pathlib import Path
 from typing import Optional
 
 from .base import Risk, ToolRegistry, ToolResult
+from .ssrf import url_blocked
+from .paths import in_workspace
+import threading
 
 try:
     from playwright.sync_api import sync_playwright, Error as PWError
@@ -64,7 +67,33 @@ class BrowserSession:
         self._pw = self._browser = self._page = None
 
 
-_SESSION = BrowserSession()
+# v1.9.9 B3 FIX: thread-local browser sessions. Parallel tasks run in
+# ThreadPoolExecutor worker threads — a global singleton made agent A read
+# agent B's page (cross-task contamination). Each thread now owns a session;
+# sequential tasks on the same thread still reuse it (desired state carry-over).
+_TLS = threading.local()
+_ALL_SESSIONS: list = []
+_SESS_LOCK = threading.Lock()
+
+
+def _current_session() -> "BrowserSession":
+    s = getattr(_TLS, "session", None)
+    if s is None:
+        s = BrowserSession()
+        _TLS.session = s
+        with _SESS_LOCK:
+            _ALL_SESSIONS.append(s)
+    return s
+
+
+def close_all_sessions() -> None:
+    with _SESS_LOCK:
+        for s in _ALL_SESSIONS:
+            try:
+                s.close()
+            except Exception:
+                pass
+        _ALL_SESSIONS.clear()
 
 
 def _wrap(fn) -> ToolResult:
@@ -101,9 +130,36 @@ class BrowserTools:
     def navigate(self, url: str, wait_seconds: float = 3.0,
                  wait_for: str = "", **kw) -> ToolResult:
         def go():
-            page = _SESSION.page()
+            # v1.9.9 B1 FIX: the browser MUST obey the same SSRF policy as the
+            # web tools (live audit: browser_navigate bypassed url_blocked and
+            # could reach 127.0.0.1/metadata — SSRF hole through the new tool).
+            why = url_blocked(url)
+            if why:
+                return ToolResult(False, error=f"SSRF blocked: {why}")
+            page = _current_session().page()
             requested = url.strip()
+
+            # per-request interception: blocks redirects/fetches into private nets
+            def _guard(route):
+                w = url_blocked(route.request.url)
+                if w:
+                    return route.abort()
+                return route.continue_()
+            try:
+                page.route("**/*", _guard)
+            except Exception:
+                pass
+
             page.goto(url, wait_until="domcontentloaded", timeout=45000)
+            # post-load check: final URL after redirects must also be clean
+            why2 = url_blocked(page.url)
+            if why2:
+                try:
+                    page.go_back()
+                except Exception:
+                    pass
+                return ToolResult(False, error=(
+                    f"SSRF blocked: navigation ended on a forbidden target ({why2})"))
             try:
                 page.wait_for_load_state("networkidle", timeout=int(wait_seconds * 1000))
             except Exception:
@@ -170,7 +226,7 @@ class BrowserTools:
 
     def click(self, selector: str, timeout_ms: int = 8000, **kw) -> ToolResult:
         def do():
-            page = _SESSION.page()
+            page = _current_session().page()
             el = page.locator(selector).first
             el.wait_for(state="visible", timeout=timeout_ms)
             el.click(timeout=timeout_ms)
@@ -183,7 +239,7 @@ class BrowserTools:
 
     def fill(self, selector: str, text: str, submit: bool = False, **kw) -> ToolResult:
         def do():
-            page = _SESSION.page()
+            page = _current_session().page()
             el = page.locator(selector).first
             el.wait_for(state="visible", timeout=8000)
             el.fill(text)
@@ -212,10 +268,15 @@ class BrowserTools:
 
     def snapshot(self, path: str = "screenshots/page.png", full_page: bool = False, **kw) -> ToolResult:
         def do():
-            page = _SESSION.page()
-            p = Path(path)
-            if not p.is_absolute():
-                p = (self.root / path).resolve()
+            page = _current_session().page()
+            # v1.9.9 B2 FIX: sandbox EVERY resolved path inside the workspace —
+            # absolute paths and ../ traversal previously escaped the sandbox.
+            raw = Path(path)
+            p = raw.resolve() if raw.is_absolute() else (self.root / raw).resolve()
+            if not in_workspace(p, self.root):
+                return ToolResult(False, error=(
+                    f"BLOCKED: screenshot path escapes the workspace sandbox: {path} "
+                    f"(resolved {p}). Use paths inside {self.root}."))
             p.parent.mkdir(parents=True, exist_ok=True)
             page.screenshot(path=str(p), full_page=bool(full_page))
             try:
@@ -229,7 +290,7 @@ class BrowserTools:
 
     def content(self, max_chars: int = _MAX_TEXT, selector: str = "body", **kw) -> ToolResult:
         def do():
-            page = _SESSION.page()
+            page = _current_session().page()
             if selector == "body":
                 return ToolResult(True, output=_describe_page(page, max_chars))
             el = page.locator(selector).first
@@ -239,15 +300,18 @@ class BrowserTools:
 
     def eval_js(self, expression: str, **kw) -> ToolResult:
         def do():
-            page = _SESSION.page()
+            page = _current_session().page()
             val = page.evaluate(expression)
             out = json.dumps(val, default=str) if not isinstance(val, str) else val
             return ToolResult(True, output=str(out)[:4000])
         return _wrap(do)
 
-    def close(self, **kw) -> ToolResult:
-        _SESSION.close()
-        return ToolResult(True, output="browser session closed")
+    def close(self, close_all: bool = False, **kw) -> ToolResult:
+        if close_all:
+            close_all_sessions()
+            return ToolResult(True, output="ALL browser sessions closed")
+        _current_session().close()
+        return ToolResult(True, output="browser session closed (this thread)")
 
     # ------------------------------------------------------------------
     def register(self, reg: ToolRegistry) -> None:

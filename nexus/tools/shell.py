@@ -26,6 +26,84 @@ DANGEROUS = [
 # approval). Any file-deletion attempt inside run_shell / run_python == hard block.
 # In live adversarial tests the agent tried all of these routes:
 #   rm, shred, find -delete, python -c os.remove, os.system('rm ...'), .trash move
+# v1.9.9 F1: shell is a NETWORK TOOL too — curl/wget/python inside run_shell
+# bypassed the SSRF policy that web_fetch/http_request/browser obey (live:
+# agent exfiltrated a loopback service AND hit cloud-metadata via plain curl).
+# Policy: block link-local/metadata/RFC1918/private-DNS in shell commands.
+# Loopback (127.0.0.1/localhost/::1) stays ALLOWED by default — local dev and
+# the critic's hosting checks legitimately curl 127.0.0.1 (same user, same
+# machine, no privilege boundary). Config: safety.shell.allow_loopback.
+_NET_GUARD_URL = re.compile(r'https?://[^\s"<>`]+', re.I)
+_NET_GUARD_HOST = re.compile(
+    r"(?:\b(?:curl|wget|nc|ncat|netcat|telnet|ssh|ftp|http|https)\s+[^\n]{0,200}?"
+    r"(?:[\w.-]+))", re.I)
+_SHELL_ALLOW_LOOPBACK = True
+
+
+def _host_blocked_for_shell(host: str) -> str:
+    """SSRF check for shell network targets; loopback allowed by policy."""
+    from urllib.parse import urlparse as _up
+    h = (host or "").strip().lower()
+    if "@" in h:
+        h = h.rsplit("@", 1)[-1]
+    if not h:
+        return ""
+    if _SHELL_ALLOW_LOOPBACK and h in ("127.0.0.1", "localhost", "::1", "[::1]"):
+        return ""
+    import ipaddress as _ipa
+    try:
+        if h.startswith("[") and "]" in h:          # [ipv6] literal
+            ip = _ipa.ip_address(h[1:h.index("]")])
+            if (ip.is_private or ip.is_loopback or ip.is_link_local
+                    or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+                return f"blocked address: {ip}"
+            return ""
+        ip = _ipa.ip_address(h)
+        if _SHELL_ALLOW_LOOPBACK and ip.is_loopback:
+            return ""
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            return f"blocked address: {ip}"
+        return ""
+    except ValueError:
+        pass
+    from .ssrf import url_blocked as _ub
+    why = _ub("http://" + h)
+    if why and "127.0.0.1" in why and _SHELL_ALLOW_LOOPBACK:
+        return ""
+    return why
+
+
+def _shell_network_guard(command: str) -> str:
+    """Return a block-reason if the command targets a forbidden network host."""
+    reasons = []
+    for m in _NET_GUARD_URL.finditer(command or ""):
+        raw = m.group(0)
+        from urllib.parse import urlparse as _up
+        try:
+            host = (_up(raw).netloc or "").split("@")[-1].split(":")[0]
+        except Exception:
+            host = ""
+        if host:
+            why = _host_blocked_for_shell(host)
+            if why:
+                reasons.append(f"{raw} -> {why}")
+    # bare-IP invocations without scheme:  curl 169.254.169.254 / nc 10.0.0.1 80
+    for m in re.finditer(
+            r"\b(?:curl|wget|nc|ncat|netcat|telnet|ssh)\s+(?!https?(?::|\Z)|ftp(?::|\Z))([@%\w.:-]+)", command or "", re.I):
+        tok = m.group(1).strip("'\"")
+        if tok and not tok.startswith("-"):
+            why = _host_blocked_for_shell(tok)
+            if why:
+                reasons.append(f"{m.group(0)} -> {why}")
+    if reasons:
+        return ("SSRF blocked by shell network policy: " + "; ".join(reasons[:3]) +
+                " (metadata/link-local/RFC1918 targets are forbidden in run_shell; "
+                "use web_fetch/http_request for public URLs, or the dedicated tools "
+                "for workspace-local servers)")
+    return ""
+
+
 SHELL_DELETE = re.compile(
     r"(^|[\s;&|(])(rm|rmdir|unlink|shred|srm|wipe|trash-put|trash)\b"
     r"|(^|\s)-delete\b"
@@ -116,6 +194,9 @@ class ShellTools:
     def _run_shell(self, command: str, cwd: str = ".", timeout: int = 0) -> ToolResult:
         # ---- deletion choke-point: rm/shred/find -delete etc. hard-blocked
         command = self._prefer_python3(command)
+        net_why = _shell_network_guard(command)
+        if net_why:
+            return ToolResult(False, error=net_why)
         if SHELL_DELETE.search(command):
             return ToolResult(False, error="BLOCKED: this command deletes files. " + DELETE_GUIDE)
         # ---- foreground-server choke-point: servers must use start_server
@@ -473,16 +554,36 @@ class ShellTools:
         if not _in_ws(dabs, self.root):
             return ToolResult(False, error="BLOCKED: start_server directory escapes workspace")
 
-        # if requested port is already bound, pick a free one (live: stale
-        # Varanasi server occupied :8000 so Ops Lab "verified" the wrong site)
+        # v1.9.9 F3: a user-specified port is an EXACT PARAMETER — if it is
+        # already bound, FAIL with an actionable error instead of silently
+        # switching ports (live: goal said 8090, tool silently served on 49609
+        # and the task "passed" on the wrong port). Explicit port=0 still
+        # auto-assigns. (The old silent failover existed because a stale server
+        # on :8000 made a task "verify" the wrong site — now the agent gets a
+        # clear error and can stop_server or justify a different port.)
         if port and port != 0:
             probe = _socket.socket()
             try:
                 probe.bind(("127.0.0.1", int(port)))
-            except OSError:
-                port = 0
-            finally:
                 probe.close()
+            except OSError:
+                probe.close()
+                tracked = ""
+                try:
+                    reg = self.root / self._SERVER_REG
+                    if reg.exists():
+                        import json as _j2
+                        d = _j2.loads(reg.read_text(encoding="utf-8") or "{}")
+                        if str(port) in d:
+                            tracked = (f" It is a harness-tracked server "
+                                       f"(pid {d[str(port)].get('pid')}) â "
+                                       f"call stop_server(port={port}) first.")
+                except Exception:
+                    pass
+                return ToolResult(False, error=(
+                    f"port {port} is ALREADY IN USE â refusing to silently serve "
+                    f"on a different port.{tracked} Either stop the existing server "
+                    f"and retry, or pass a different port explicitly."))
         if port == 0:
             s = _socket.socket()
             s.bind(("127.0.0.1", 0))

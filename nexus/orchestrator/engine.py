@@ -101,20 +101,60 @@ MATH_HAS_OP = _re.compile(r"[\d)]\s*[+\-*/×÷^]\s*[\d(]")
 # failed forever on "no verified start_server call" (live: login-flow analysis burned
 # 5m46s + 230k tokens on a hosting check it could never satisfy). Real hosting intent =
 # an explicit serving tool/command, or host/serve/deploy DIRECTLY next to a deliverable.
+# v1.9.9: localhost:PORT alone is NOT hosting intent (live regression: the
+# SSRF-analysis goal "Open http://127.0.0.1:7777..." fired the goal-level
+# hosting parachute). A bare localhost:PORT now counts only when a serving
+# verb exists anywhere in the same text (serve/host/deploy/publish).
+_SERVE_VERB = _re.compile(r"\b(?:serve|serving|host|hosting|deploy|deploying|publish|publishing|restart|restarting|relaunch|launch|launching)\b", _re.I)
 _QUICK_BLOCK = _re.compile(
     r"(?is)\b(?:"
     r"http\.server|start_server|"
-    r"(?:localhost|127\.0\.0\.1):\d+|"
-    r"(?:host|hosting|serve|serving|deploy|deploying|publish|publishing)\s+"
+    r"(?:host|hosting|serve|serving|deploy|deploying|publish|publishing|restart|restarting|relaunch|launch|launching)\s+"
     r"(?:the\s+|this\s+|it\s+|my\s+|a\s+)?"
-    r"(?:site|website|page|web\s?app|app|server|portfolio|landing|dashboard|frontend|url)"
+    r"(?:site|website|page|web\s?app|app|server|portfolio|landing|dashboard|frontend|url|it|them)"
     r")\b")
+
+
+def _is_hosting_intent(text: str) -> bool:
+    """True when the text carries REAL hosting intent (task/goal level)."""
+    if not text:
+        return False
+    if _QUICK_BLOCK.search(text):
+        return True
+    bare = _re.search(r"(?:localhost|127\.0\.0\.1):\d+", text)
+    return bool(bare and _SERVE_VERB.search(text))
 # v1.8.3: explicit hosting spec the supervisor writes into host-task descriptions
 _START_SERVER_SPEC = _re.compile(
     r"start_server\(\s*command\s*=\s*['\"]([^'\"]+)['\"][^)]*?port\s*=\s*(\d+)"
     r"[^)]*?marker\s*=\s*['\"]([^'\"]+)['\"]", _re.S)
 _HTML_TITLE = _re.compile(r"<title>\s*([^<]{2,80}?)\s*</title>", _re.S | _re.I)
 
+
+
+
+def rel_dir_serves(cmd: str, body: str) -> bool:
+    """F4d helper: for heuristic (spec-less) hosting, accept the already-live
+    server when its response is an HTML document (a real site, not a 404 or
+    an empty dir listing of a wrong folder)."""
+    return "<html" in body.lower() or "<!doctype" in body.lower()
+
+def _hosting_mandatory(task) -> bool:
+    """v1.9.9 F4: per-task hosting enforcement keys on the TITLE (the short
+    deliverable the planner wrote) or an explicit start_server(...) spec in
+    the description -- NOT on the whole description. Live bug: the replanner
+    embeds goal context ("python3 -m http.server 8090", "restart the site")
+    into every task description, so a pure "Create sample stats.json" task
+    was judged a hosting task, failed 3x on hosting it never owed, and burned
+    ~460k tokens. A task's description may QUOTE hosting; its title says what
+    the task IS. Titles of real hosting tasks start with serve/host/restart/
+    deploy/launch (observed live: "Restart the site on port 8090", "Start
+    server and verify")."""
+    try:
+        if _is_hosting_intent(task.title or ""):
+            return True
+        return bool(_START_SERVER_SPEC.search(task.description or ""))
+    except Exception:
+        return _is_hosting_intent(task.description or "")
 
 def quick_math(goal: str) -> Optional[str]:
     """Solve pure-arithmetic goals like '8282+282282' locally, without the LLM."""
@@ -457,7 +497,7 @@ class Orchestrator:
         # cut t3, t4 never started, user was told to run http.server themselves.
         if self._goal_needs_host(goal, dag) and not self._server_evidence:
             host_task = next((t for t in reversed(dag.order())
-                              if _QUICK_BLOCK.search(f"{t.title} {t.description}")),
+                              if _is_hosting_intent(f"{t.title} {t.description}")),
                              None)
             if host_task is None and dag.order():
                 host_task = dag.order()[-1]
@@ -592,10 +632,10 @@ class Orchestrator:
     def _goal_needs_host(goal: str, dag: Optional[TaskDAG] = None) -> bool:
         """v1.8.7: hosting is required if the USER GOAL says so, not only if
         some task description happened to mention http (timeout can skip t4)."""
-        if _QUICK_BLOCK.search(goal or ""):
+        if _is_hosting_intent(goal or ""):
             return True
         if dag is not None:
-            return any(_QUICK_BLOCK.search(f"{t.title} {t.description}")
+            return any(_is_hosting_intent(f"{t.title} {t.description}")
                        for t in dag.tasks.values())
         return False
 
@@ -680,8 +720,42 @@ class Orchestrator:
                 title_m = _HTML_TITLE.search(
                     idx.read_text(encoding="utf-8", errors="replace"))
                 marker = (title_m.group(1).strip() if title_m else "index")[:80]
+                # v1.9.9 F4c: the goal usually names its port ("on port 8090",
+                # ":8090") -- use it instead of a hardcoded 8000 (live: goal
+                # said 8090, parachute tried 8000, which a stale server held).
                 port = 8000
+                pm = _re.search(r"port\s*[=: ]\s*(\d{4,5})\b|:(\d{4,5})\b", text)
+                if pm:
+                    cand = int(pm.group(1) or pm.group(2))
+                    if 1024 <= cand <= 65535:
+                        port = cand
                 cmd = f"python3 -m http.server {port} --directory {rel}"
+            # v1.9.9 F4d: a harness-tracked server ALREADY serving this port
+            # with the marker present in its body counts as hosted (live:
+            # "restart the site on 8090" while 8090 already served that site ->
+            # parachute died on ALREADY IN USE instead of accepting reality).
+            try:
+                reg_p = getattr(self.ctx.shell, "root", None)
+                reg_name = getattr(self.ctx.shell, "_SERVER_REG", None)
+                if reg_p is not None and reg_name:
+                    import json as _j3
+                    rp = Path(reg_p) / reg_name
+                    if rp.exists() and str(port) in _j3.loads(
+                            rp.read_text(encoding="utf-8") or "{}"):
+                        import urllib.request as _ur
+                        with _ur.urlopen(f"http://127.0.0.1:{port}/",
+                                         timeout=3) as _resp:
+                            _body = _resp.read().decode("utf-8", "replace")
+                        if (not marker or marker in _body) and (
+                                m or rel_dir_serves(cmd, _body)):
+                            out = (f"[already-hosted] harness-tracked server on "
+                                   f"port {port} verified live (marker present).")
+                            self._server_evidence.append(out)
+                            self.ui.event("ok", f"{task.id}: hosting already live on {port}")
+                            task.output = (task.output or "") + "\n\n" + out
+                            return True
+            except Exception:
+                pass  # fall through to a real start_server attempt
             r = self.ctx.shell.start_server(command=cmd, port=port, marker=marker,
                                             name="nexus-parachute")
             if not r.ok and "marker" in (r.error or "") and not m:
@@ -744,7 +818,7 @@ class Orchestrator:
             # returned an EMPTY response (0 tool calls), burning an attempt+critic round.
             quick = (agent_name == "coder" and attempt == 0
                      and len(task.description) < 400
-                     and not _QUICK_BLOCK.search(task.description))
+                     and not _is_hosting_intent(task.description))
             agent = self.agent_for(agent_name, quick=quick)
 
             # v1.8.3: a planned model that stayed silent gets EXCLUDED on retries —
@@ -775,7 +849,7 @@ class Orchestrator:
                 # v1.8.3: hosting tasks go to the parachute even when the model
                 # returned nothing at all (live: codestral-2508 answered with zero
                 # tool calls on 3 attempts; the host never happened)
-                if _QUICK_BLOCK.search(task.description) and self._host_parachute(task):
+                if (_hosting_mandatory(task) and self._host_parachute(task)):
                     task.status = TaskStatus.DONE
                     task.verdict = "pass"
                     task.score = 100.0
@@ -800,7 +874,7 @@ class Orchestrator:
             # call, else the harness executes the hosting itself (parachute).
             # (live: t4 took 4 unrelated steps, critic said 'partial 70' and the
             #  score>=70 shortcut marked it DONE with NO server at all.)
-            if (agent_name == "coder" and _QUICK_BLOCK.search(task.description)
+            if (agent_name == "coder" and _hosting_mandatory(task)
                     and not any(s.kind == "tool" and s.ok and s.tool == "start_server"
                                 for s in outcome.steps)):
                 self.ui.event("warn", f"{task.id}: hosting not executed — harness takes over")
