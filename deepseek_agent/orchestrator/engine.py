@@ -361,7 +361,7 @@ class Orchestrator:
         self.max_retries = int(self.config.get("autonomy.max_retries", 2))
         self.overall_timeout = float(self.config.get("autonomy.overall_timeout_seconds", 1500))
         self.max_depth = int(self.config.get("autonomy.max_task_depth", 3))
-        self._devstral_slots = int(self.config.get("autonomy.max_devstral_parallel", 2))
+        # (DeepSeek runs every role; no separate parallel-slots budget needed)
         # v1.8.3: verified start_server outputs across the run (hosting truth)
         self._server_evidence: List[str] = []
 
@@ -1109,11 +1109,18 @@ class Orchestrator:
         r"you must run the server[^\n]*)\n?")
 
     def _sanitize_final(self, text: str, hosting_required: bool) -> str:
-        """Strip DIY hosting-guides even if the LLM ignores FACTS."""
+        """Strip DIY hosting-guides even if the LLM ignores FACTS.
+
+        v2.0: the DIY strip applies whenever hosting is required — a final
+        answer that hands the server to the user ("run python3 -m http.server")
+        is a FAIL even if a start_server was verified earlier (live: agent
+        verified HTTP 200 once, then handed the user a DIY command). The
+        "NOT verified" note is only appended when there is no evidence at all.
+        """
         out = text or ""
-        if hosting_required and not self._server_evidence:
+        if hosting_required:
             out = self._DIY_SERVER.sub("", out)
-            if not _re.search(r"not verified", out, _re.I):
+            if not self._server_evidence and not _re.search(r"not verified", out, _re.I):
                 out = (out.rstrip() +
                        "\n\nHosting was NOT verified in this run "
                        "(no start_server evidence).")
@@ -1326,17 +1333,15 @@ class Orchestrator:
                 return
             task.attempts = attempt + 1
             # v1.8.1: the quick (cheap) coder must never handle hosting/verification
-            # — live TUI run: host task (short desc) went to codestral-2508 which
-            # returned an EMPTY response (0 tool calls), burning an attempt+critic round.
+            # — live run: a host task answered EMPTY (0 tool calls), burning an
+            # attempt+critic round.
             quick = (agent_name == "coder" and attempt == 0
                      and len(task.description) < 400
                      and not _is_hosting_intent(task.description))
             agent = self.agent_for(agent_name, quick=quick)
 
             # v1.8.3: a planned model that stayed silent gets EXCLUDED on retries —
-            # attempt 0 may use task.model, retries always use the role chain
-            # (live: codestral-2508 returned zero tool calls on 3 attempts; only
-            #  devstral-2512 in the chain actually works on this account)
+            # attempt 0 may use task.model, retries always use the role chain.
             outcome: AgentOutcome = agent.run(
                 f"{task.title}\n\n{task.description}", context,
                 on_step=lambda s, tt=task: (self._deadline_or_cancel(t0) or
@@ -1371,8 +1376,7 @@ class Orchestrator:
             # fast WITHOUT a 30-60s critic round; retry immediately with the fix note.
             if agent_name == "coder" and not any(s.kind == "tool" for s in outcome.steps):
                 # v1.8.3: hosting tasks go to the parachute even when the model
-                # returned nothing at all (live: codestral-2508 answered with zero
-                # tool calls on 3 attempts; the host never happened)
+                # returned nothing at all (live: the host never happened)
                 if (_hosting_mandatory(task) and self._host_parachute(task)):
                     task.status = TaskStatus.DONE
                     task.verdict = "pass"

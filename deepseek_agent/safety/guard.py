@@ -4,12 +4,14 @@ from __future__ import annotations
 import re
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-# v1.10.4 BUG-1 FIX: these names were invented — the moderation model
-# (mistral-moderation-2603) actually returns: sexual, hate_and_discrimination,
-# violence_and_threats, dangerous, criminal, selfharm, health, financial, law,
-# pii, jailbreaking. "dangerous_and_criminal_content"/"self_harm"/"weapons"
-# matched NOTHING, so 5 of the 6 patterns were dead and a jailbreak asking to
-# exfiltrate the API keys sailed through (verified live).
+# v1.10.4 BUG-1 FIX: these names were invented — the moderation model actually
+# returns: sexual, hate_and_discrimination, violence_and_threats, dangerous,
+# criminal, selfharm, health, financial, law, pii, jailbreaking.
+# "dangerous_and_criminal_content"/"self_harm"/"weapons" matched NOTHING, so
+# 5 of the 6 patterns were dead and a jailbreak asking to exfiltrate the API
+# keys sailed through (verified live).
+# DeepSeek-Agent: there is no separate moderation model — DeepSeek-Agent's own
+# harness rules (below) enforce safety on user input and final output.
 HIGH_RISK_CATEGORIES = {
     "sexual/minors", "child_sexual_exploitation", "violence_and_threats",
     "self_harm", "selfharm", "dangerous", "criminal", "weapons",

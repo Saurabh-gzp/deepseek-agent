@@ -230,8 +230,8 @@ class DeepSeekApp:
         self.ui.print("  Select a provider:")
         for i, p in enumerate(provs, 1):
             self.ui.print(f"   [accent]{i}[/] {p}"
-                          + ("  [muted](recommended — free: console.mistral.ai)[/]"
-                             if p == "mistral" else ""))
+                          + ("  [muted](native — DeepSeek email+password login)[/]"
+                             if p == "deepseek" else ""))
         self.ui.print("   [muted]0 skip (you can add one later with /key)[/]")
         try:
             sel = self.ui.ask("provider").strip()
@@ -675,7 +675,7 @@ class DeepSeekApp:
             self.ui.table("API KEYS", ["provider", "label", "key", "state", "ok", "fail", "tokens"],
                           rows, ["muted", "accent", "muted", "white", "ok", "err", "muted"])
         else:
-            self.ui.event("warn", "no API keys configured — set MISTRAL_API_KEY")
+            self.ui.event("warn", "no DeepSeek account configured — run the /login wizard")
 
     def _persist_key(self, provider: str, key: str) -> None:
         f = self.config.data_dir / "keys.json"

@@ -593,6 +593,16 @@ class ShellTools:
         # clear error and can stop_server or justify a different port.)
         if port and port != 0:
             probe = _socket.socket()
+            # SO_REUSEADDR: a just-stopped server leaves its accepted
+            # connection in TIME_WAIT, which makes a plain bind() report
+            # EADDRINUSE even though http.server (allow_reuse_address=1)
+            # would rebind instantly. Without this, stop_server -> restart
+            # on the same port always "collides". With it, a real active
+            # listener (not TIME_WAIT) still refuses correctly.
+            try:
+                probe.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+            except OSError:
+                pass
             try:
                 probe.bind(("127.0.0.1", int(port)))
                 probe.close()
@@ -853,6 +863,10 @@ class ShellTools:
             bound = False
             if port:
                 s = socket.socket()
+                try:
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                except OSError:
+                    pass
                 try:
                     s.bind(("127.0.0.1", port))
                 except OSError:

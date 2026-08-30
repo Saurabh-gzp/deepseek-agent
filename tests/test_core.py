@@ -25,49 +25,20 @@ from deepseek_agent.tools.shell import ShellTools                   # noqa: E402
 class TestKeyRing:
 
     def test_discover_many_numbered_keys(self):
-        """v1.8.1: 10+ keys — MISTRAL_API_KEY_1.._10 must all be discovered
-        (user runs a 10-key pool to absorb 429 storms)."""
+        """v1.8.1: 10+ keys — DEEPSEEK_API_KEY_1.._10 must all be discovered."""
         import os
         names = []
         for i in range(1, 11):
-            n = f"MISTRAL_API_KEY_{i}"
+            n = f"DEEPSEEK_API_KEY_{i}"
             os.environ[n] = f"k{i}"
             names.append(n)
         try:
-            keys = KeyRing.discover("mistral", ["MISTRAL_API_KEY"], None)
+            keys = KeyRing.discover("deepseek", ["DEEPSEEK_API_KEY"], None)
             assert len(keys) == 10, keys
             assert "k10" in keys
         finally:
             for n in names:
                 os.environ.pop(n, None)
-
-    def test_rotation_no_cap_tries_every_key(self):
-        """v1.8.2: max_key_rotations_per_call=0 means NO cap — a 3-key ring gets
-        exactly 3 tries per call (one per key), not max(6,3)=6 with re-uses."""
-        import io
-        import urllib.error
-        from email.message import Message
-        import deepseek_agent.providers.mistral as mm
-        ring = KeyRing("mistral", ["a", "b", "c"])
-        prov = mm.MistralProvider({"max_key_rotations_per_call": 0}, ring,
-                                  notifier=lambda *a, **k: None)
-        auths = []
-        orig_urlopen = mm.urllib.request.urlopen
-        orig_sleep = mm.time.sleep
-        def fake_urlopen(req, timeout=None):
-            auths.append(req.get_header("Authorization"))
-            raise urllib.error.HTTPError(req.full_url, 429, "rate limited",
-                                         Message(), io.BytesIO(b'{"error":"e"}'))
-        try:
-            mm.urllib.request.urlopen = fake_urlopen
-            mm.time.sleep = lambda s: None
-            with pytest.raises(Exception):
-                prov._request("/chat/completions", {})
-        finally:
-            mm.urllib.request.urlopen = orig_urlopen
-            mm.time.sleep = orig_sleep
-        assert len(auths) == 3, f"expected 3 tries (one per key), got {len(auths)}"
-        assert sorted(a.split()[-1] for a in auths) == ["a", "b", "c"]
 
     def test_discover_and_rotate(self):
         ring = KeyRing("test", ["k1", "k2", "k3"])
@@ -1107,33 +1078,33 @@ class TestKeyManager:
     def test_add_list_remove_cycle(self, tmp_path):
         from deepseek_agent.core.keymanager import KeyManager, mask
         km = KeyManager(self._cfg(tmp_path))
-        assert km.add("mistral", "k111111111111111111") is True
-        assert km.add("mistral", "k111111111111111111") is False   # dedup
-        km.add("mistral", "k222222222222222222")
-        assert km.load("mistral") == ["k111111111111111111", "k222222222222222222"]
-        removed = km.remove_at("mistral", 1)
+        assert km.add("deepseek", "k111111111111111111") is True
+        assert km.add("deepseek", "k111111111111111111") is False   # dedup
+        km.add("deepseek", "k222222222222222222")
+        assert km.load("deepseek") == ["k111111111111111111", "k222222222222222222"]
+        removed = km.remove_at("deepseek", 1)
         assert removed == "k111111111111111111"
-        assert km.load("mistral") == ["k222222222222222222"]
+        assert km.load("deepseek") == ["k222222222222222222"]
         assert mask("abcdefghijklmnop") == "abcd…mnop"
 
     def test_file_permissions_and_shape(self, tmp_path):
         from deepseek_agent.core.keymanager import KeyManager
         import json, os
         km = KeyManager(self._cfg(tmp_path))
-        km.add("mistral", "sk-XYZ123456789012345")
-        f = tmp_path / "keys" / "mistral.json"
+        km.add("deepseek", "sk-XYZ123456789012345")
+        f = tmp_path / "keys" / "deepseek.json"
         data = json.loads(f.read_text())
-        assert data["provider"] == "mistral" and len(data["keys"]) == 1
+        assert data["provider"] == "deepseek" and len(data["keys"]) == 1
         assert oct(os.stat(f).st_mode)[-3:] == "600"
 
     def test_all_and_migrate_legacy(self, tmp_path):
         from deepseek_agent.core.keymanager import KeyManager
         legacy = tmp_path / "keys.json"
-        legacy.write_text('{"mistral": ["kAAAAABBBBBCCCCC1", "kAAAAABBBBBCCCCC2"]}')
+        legacy.write_text('{"deepseek": ["kAAAAABBBBBCCCCC1", "kAAAAABBBBBCCCCC2"]}')
         km = KeyManager(self._cfg(tmp_path))
         moved = km.migrate_legacy(legacy)
         assert moved == 2
-        assert len(km.load("mistral")) == 2
+        assert len(km.load("deepseek")) == 2
         assert not legacy.exists()
 
     def test_ring_remove_key_live(self):
@@ -1160,7 +1131,7 @@ class TestKeyManager:
 class TestUnifiedKeys:
     def test_env_and_file_keys_one_list(self):
         from deepseek_agent.core.keymanager import unified_keys
-        ring = KeyRing("mistral", ["ENVKEY1111111111111"])
+        ring = KeyRing("deepseek", ["ENVKEY1111111111111"])
         u = unified_keys(["FILEKEY111111111111"], ring)
         assert [x["src"] for x in u] == ["keys/", ".env"]
         assert [x["n"] for x in u] == [1, 2]
@@ -1168,7 +1139,7 @@ class TestUnifiedKeys:
 
     def test_dup_across_sources_removed(self):
         from deepseek_agent.core.keymanager import unified_keys
-        ring = KeyRing("mistral", ["SAMEKEYAAAAAAAAAAA"])
+        ring = KeyRing("deepseek", ["SAMEKEYAAAAAAAAAAA"])
         u = unified_keys(["SAMEKEYAAAAAAAAAAA"], ring)
         assert len(u) == 1 and u[0]["src"] == "keys/"
 
@@ -1470,35 +1441,18 @@ class TestV184:
         ring.mark_all_down()                        # idempotent
         assert ring.all_down_for(0) is True
 
-    def test_mistral_raises_honestly_when_all_down(self):
-        import time as _t
-        import deepseek_agent.providers.mistral as mm
-        from deepseek_agent.providers.keyring import KeyRing, KeyState
-        ring = KeyRing("mistral", ["a"])
-        ring.keys[0].state = KeyState.DEAD                       # no healthy key
-        ring.keys[0].cooldown_until = _t.time() + 9999
-        ring.mark_all_down()
-        ring._no_health_since = _t.time() - 200                  # 200s ago, never recovered
-        prov = mm.MistralProvider({}, ring, notifier=lambda *a, **k: None)
-        err = None
-        try:
-            prov._request("/chat/completions", {})
-        except Exception as e:  # noqa: BLE001
-            err = e
-        assert err is not None and "quota" in str(err).lower(), f"must raise honest quota error, got {err!r}"
-
-    def test_discover_bulk_mistral_apis(self):
-        """v1.8.4: MISTRAL_APIS (documented) AND MISTRAL_API_KEYS both load."""
+    def test_discover_bulk_deepseek_apis(self):
+        """v1.8.4: DEEPSEEK_APIS AND DEEPSEEK_API_KEYS both load."""
         import os
         saved = {}
-        for n in ("MISTRAL_APIS", "MISTRAL_API_KEYS", "MISTRALS", "MISTRAL_API_KEY", "MISTRAL_API_KEY_1"):
+        for n in ("DEEPSEEK_APIS", "DEEPSEEK_API_KEYS", "DEEPSEEKS", "DEEPSEEK_API_KEY", "DEEPSEEK_API_KEY_1"):
             saved[n] = os.environ.pop(n, None)
         try:
-            os.environ["MISTRAL_APIS"] = "k1,k2,k3"
-            assert KeyRing.discover("mistral", ["MISTRAL_API_KEY"], None) == ["k1", "k2", "k3"]
-            os.environ["MISTRAL_APIS"] = ""
-            os.environ["MISTRAL_API_KEYS"] = "x9,x10"
-            keys = KeyRing.discover("mistral", ["MISTRAL_API_KEY"], None)
+            os.environ["DEEPSEEK_APIS"] = "k1,k2,k3"
+            assert KeyRing.discover("deepseek", ["DEEPSEEK_API_KEY"], None) == ["k1", "k2", "k3"]
+            os.environ["DEEPSEEK_APIS"] = ""
+            os.environ["DEEPSEEK_API_KEYS"] = "x9,x10"
+            keys = KeyRing.discover("deepseek", ["DEEPSEEK_API_KEY"], None)
             assert keys == ["x9", "x10"], keys
         finally:
             for n, v in saved.items():
@@ -1588,67 +1542,7 @@ class TestV185:
 
 
 class TestV186Watchdog:
-    """v1.8.6: a hung HTTP request must NOT stall the run (live runs #4/#5 hung
-    12-28 min inside one urlopen while the spinner ticked). Each attempt now
-    runs under a watchdog thread; hung keys are skipped fast and the whole call
-    is capped by a wall-clock budget."""
-
-    def _prov(self, cfg, keys, msgs):
-        import deepseek_agent.providers.mistral as mm
-        ring = KeyRing("mistral", keys)
-        prov = mm.MistralProvider(cfg, ring, notifier=lambda *a, **k: None)
-        return mm, prov
-
-    def test_hung_key_skipped_and_call_bounded(self):
-        """1 hung key + tiny budget: raises an honest error in ~1-2s, not 28 min."""
-        import time as _t
-        import urllib.error
-        import deepseek_agent.providers.mistral as mm
-        ring = KeyRing("mistral", ["a"])
-        prov = mm.MistralProvider(
-            {"timeout": 1, "watchdog_budget_slack": 0, "watchdog_grace": 0},
-            ring, notifier=lambda *a, **k: None)
-        calls = []
-        orig = mm.urllib.request.urlopen
-
-        def hang(req, timeout=None):
-            calls.append(req.get_header("Authorization"))
-            _t.sleep(30)          # never returns
-        mm.urllib.request.urlopen = hang
-        try:
-            t0 = _t.time()
-            with pytest.raises(Exception) as ei:
-                prov._request("/chat/completions", {})
-            dt = _t.time() - t0
-        finally:
-            mm.urllib.request.urlopen = orig
-        assert "watchdog" in str(ei.value).lower() or "call budget" in str(ei.value).lower()
-        assert dt < 10, f"took {dt:.1f}s — the old code took minutes"
-
-    def test_hung_first_key_fails_over_to_second(self):
-        """key A hangs, key B answers → the call succeeds via B."""
-        import time as _t
-        import deepseek_agent.providers.mistral as mm
-        ring = KeyRing("mistral", ["a", "b"])
-        prov = mm.MistralProvider(
-            {"timeout": 1, "watchdog_budget_slack": 12, "watchdog_grace": 1},
-            ring, notifier=lambda *a, **k: None)
-        order = []
-        orig = mm.urllib.request.urlopen
-
-        def fake(req, timeout=None):
-            auth = req.get_header("Authorization").split()[-1]
-            order.append(auth)
-            if auth == "a":
-                _t.sleep(30)
-            return FakeResp(b'{"usage":{"total_tokens":5},"ok":true}')
-        mm.urllib.request.urlopen = fake
-        try:
-            data = prov._request("/chat/completions", {})
-        finally:
-            mm.urllib.request.urlopen = orig
-        assert order == ["a", "b"], order
-        assert data.get("ok") is True
+    """v1.8.6: the TUI driver must not treat spinner-only redraws as progress."""
 
     def test_driver_has_meaningful_progress_abort(self):
         """the TUI driver must treat spinner-only redraws as NO progress."""

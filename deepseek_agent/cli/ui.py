@@ -276,8 +276,8 @@ class UI:
         for i, task in enumerate(dag.order(), 1):
             model = getattr(task, "model", "") or ""
             if not model:
-                model = {"coder": "codestral/devstral", "researcher": "mistral-small",
-                         "worker": "ministral-8b", "critic": "mistral-medium"}.get(task.agent, "auto")
+                model = {"coder": "deepseek-expert", "researcher": "deepseek-expert",
+                         "worker": "deepseek-instant", "critic": "deepseek-expert"}.get(task.agent, "auto")
             t.add_row(str(i), task.title[:46],
                       f"{AGENT_ICON.get(task.agent, '•')} {task.agent}",
                       model,
@@ -401,8 +401,13 @@ class UI:
         self.console.print(Panel(
             Text(f"agent : {agent}\ntool  : {tool}\n{detail}", style="warn"),
             title="[warn]⚠ APPROVAL REQUIRED[/]", border_style="warn"))
-        ans = Prompt.ask("[warn]Allow?[/]", choices=["y", "n", "a"], default="n",
-                         console=self.console)
+        try:
+            ans = Prompt.ask("[warn]Allow?[/]", choices=["y", "n", "a"], default="n",
+                             console=self.console)
+        except (EOFError, KeyboardInterrupt):
+            # Non-interactive run (piped / one-shot) can't answer a prompt —
+            # default to a SAFE DENY instead of crashing the whole run.
+            return "no"
         return {"y": "yes", "n": "no", "a": "always"}[ans]
 
     # ---------------- progress ----------------

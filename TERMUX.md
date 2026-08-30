@@ -23,7 +23,7 @@ setup.sh installs Python dependencies automatically and prints the launch
 command. If anything fails, a minimal `python` + `rich` + `PyYAML` install
 is still enough to run.
 
-## Step 3 — Add a key
+## Step 3 — Log in with your DeepSeek account
 
 Launch the agent:
 
@@ -31,10 +31,12 @@ Launch the agent:
 deepseek
 ```
 
-The first run opens the key wizard by itself — paste your **Mistral AI**
-key (free: [console.mistral.ai](https://console.mistral.ai)). Keys are
-stored only on your device (`keys/`, chmod 600, gitignored). Add more
-anytime with `/keys add sk-...`.
+The first run opens the **DeepSeek login wizard** by itself — enter your
+**DeepSeek** account email + password (the same account you use on
+chat.deepseek.com). The bearer token is stored only on your device
+(`keys/`, chmod 600, gitignored) and auto-refreshes when it expires.
+If no browser is available, it falls back to a **paste-token** mode so the
+WAF-protected login still works on Termux.
 
 `setup.sh` also installs a global `deepseek` command (removing any older
 `deepseek` command or alias first), so you can launch from anywhere with:

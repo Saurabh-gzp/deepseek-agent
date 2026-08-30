@@ -23,7 +23,7 @@ Design notes for anyone extending the system.
 ├──────────────────────────────────────────────────────────────┤
 │ LLM          llm/client.py                                   │  roles, rate limit, fallback
 ├──────────────────────────────────────────────────────────────┤
-│ PROVIDERS    providers/{keyring,mistral,openai_compat,registry}.py │ keys + HTTP
+│ PROVIDERS    providers/{keyring,deepseek,openai_compat,registry}.py │ login + HTTP
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -62,9 +62,11 @@ COOLING ──cooldown elapsed──> HEALTHY
 
 Each role has a chain in `config.yaml`:
 ```yaml
-supervisor: {model: mistral-medium-latest, fallback: [mistral-small-2603, ministral-8b-2512]}
+supervisor: {model: deepseek-chat, fallback: []}
 ```
-On failure the client walks the chain and tells the user which fallback is now in use.
+Everything runs on DeepSeek; the model name is a placeholder and the native mode
+(instant/expert/vision) is selected globally. The chain is kept for future
+multi-provider setups.
 
 ### Layer 3 — provider fallback
 
@@ -97,7 +99,7 @@ handle(goal)
      │       ├─ pass/≥70              → DONE
      │       ├─ fail + actionable fix → retry with the critic's instructions
      │       ├─ fail, no actionable   → accept (no point burning tokens)
-     │       └─ last resort           → hard_verify with mistral-large (1/task)
+     │       └─ last resort           → hard_verify (DeepSeek expert, 1/task)
      ├─ failed tasks?                 → SUPERVISOR.plan(failure_note) and rebuild the DAG,
      │                                   carrying completed work forward as context
      └─ SUPERVISOR.synthesize()       → final answer
@@ -227,7 +229,9 @@ execution.
 
 - Playwright/Chromium is unavailable on Termux — the web automation skill documents the
   API-first workarounds.
-- `mistral-large` is limited to 4 RPM, hence the 1-call-per-task budget.
-- Parallelism above 3 tends to trigger 429s on a small key pool; add keys before raising it.
+- DeepSeek is a single account login, so `large_model_calls_per_task` still bounds
+  the critic's hard-verify to one call per task.
+- Parallelism is bounded by `autonomy.max_parallel_agents` (default 3) to stay well
+  within DeepSeek's rate limits.
 - Thread-based concurrency (not asyncio) keeps the codebase readable and is sufficient for
   I/O-bound model calls at this scale.

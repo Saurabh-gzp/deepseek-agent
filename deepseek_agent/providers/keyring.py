@@ -251,10 +251,8 @@ class KeyRing:
         _add(os.getenv(base))
         for i in range(1, 21):
             _add(os.getenv(f"{base}_{i}"))
-        # comma separated bulk — accept ALL spellings in use (historic bug: docs
-        # said MISTRAL_APIS but the code read MISTRAL_API_KEYS/MISTRALS; a whole
-        # 8-key pool silently reduced to 1 key -> all traffic on key#1, 429s)
-        for bulk_name in ("MISTRAL_APIS", f"{base}S", f"{provider.upper()}S"):
+        # comma separated bulk form (generic, provider-agnostic)
+        for bulk_name in (f"{provider.upper()}_APIS", f"{base}S", f"{provider.upper()}S"):
             bulk = os.getenv(bulk_name)
             if bulk:
                 for part in bulk.split(","):

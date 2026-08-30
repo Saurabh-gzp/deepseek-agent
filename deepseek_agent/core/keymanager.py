@@ -2,7 +2,7 @@
 
 Design (user ke idea ka robust version):
     keys/
-      mistral.json     {"provider": "mistral", "keys": ["...", "..."]}
+      deepseek.json    {"provider": "deepseek", "keys": ["...", "..."]}
       openai.json      (jab enable ho)
 
 * Per-provider file, plain JSON, chmod 600 (folder 700)

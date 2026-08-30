@@ -1,4 +1,4 @@
-"""Live integration tests (needs MISTRAL_API_KEY). Run: python3 tests/test_live.py"""
+"""Live integration tests (needs a logged-in DeepSeek account). Run: python3 tests/test_live.py"""
 from __future__ import annotations
 
 import os
@@ -55,13 +55,13 @@ def main() -> int:
     # --- 3. failover with a broken key
     print("\n3. Key failover")
     from deepseek_agent.providers.keyring import KeyRing
-    ring = llm.registry.keyrings.get("mistral")
+    ring = llm.registry.keyrings.get("deepseek")
     if ring and len(ring) >= 1:
         bad = ring.add_key("INVALID_KEY_FOR_FAILOVER_TEST")
         ring._idx = len(ring.keys) - 1                     # force the bad key next
         notices = []
         llm.notify = lambda l, m: notices.append(m)
-        llm.registry.providers["mistral"].notify = lambda l, m: notices.append(m)
+        llm.registry.providers["deepseek"].notify = lambda l, m: notices.append(m)
         try:
             r = llm.chat("router", [{"role": "user", "content": "say OK"}], max_tokens=10)
             check("recovered from bad key", bool(r.content), f"used {r.key_label}")

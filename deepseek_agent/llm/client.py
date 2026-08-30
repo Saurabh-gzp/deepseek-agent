@@ -2,7 +2,7 @@
 
 Layer 1: key rotation      (provider ke andar KeyRing)
 Layer 2: model fallback    (role ki fallback chain: medium -> small -> 8b)
-Layer 3: provider fallback (mistral -> openai/groq, agar enabled ho)
+Layer 3: provider fallback (deepseek -> openai/groq, agar enabled ho)
 
 Plus: per-model rate limiting and usage accounting.
 """

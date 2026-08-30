@@ -131,7 +131,7 @@ class Config:
 
     # ---------- model roles ----------
     def model_for(self, role: str) -> str:
-        return self.get(f"models.{role}.model", self.get("models.worker.model", "ministral-8b-2512"))
+        return self.get(f"models.{role}.model", self.get("models.worker.model", "deepseek-chat"))
 
     def fallbacks_for(self, role: str) -> List[str]:
         return list(self.get(f"models.{role}.fallback", []) or [])

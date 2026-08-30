@@ -171,8 +171,8 @@ class BrowserTools:
                     pass
             # v1.9.8 WRONG-LAND AUTO-RETRY: if we landed somewhere that is NOT the
             # requested host (and not a subdomain of it), retry the EXACT url once.
-            # (Live: coder asked for mistral.ai/login, got the marketing page and
-            #  wrote a full 'analysis' of the wrong page.)
+            # (Live: a coder asked for a site's /login, got the marketing page
+            #  and wrote a full 'analysis' of the wrong page.)
             from urllib.parse import urlparse as _up
             def _landed_ok(req: str) -> bool:
                 hr = (_up(req).netloc or "").lower()

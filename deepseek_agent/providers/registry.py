@@ -12,15 +12,13 @@ from typing import Callable, Dict, List, Optional
 
 from .base import BaseProvider
 from .keyring import KeyRing
-from .mistral import MistralProvider
 from .openai_compat import OpenAICompatibleProvider
 from .deepseek import DeepSeekProvider
 
 PROVIDER_TYPES: Dict[str, type] = {
-    "mistral": MistralProvider,
+    "deepseek": DeepSeekProvider,
     "openai_compatible": OpenAICompatibleProvider,
     "openai": OpenAICompatibleProvider,
-    "deepseek": DeepSeekProvider,
 }
 
 
@@ -129,7 +127,7 @@ class ProviderRegistry:
 
     @property
     def default_name(self) -> str:
-        d = self.config.get("providers.default", "mistral")
+        d = self.config.get("providers.default", "deepseek")
         if d in self.providers:
             return d
         return next(iter(self.providers), "")
@@ -139,7 +137,7 @@ class ProviderRegistry:
         if name not in self.providers:
             raise RuntimeError(
                 f"Provider '{name}' unavailable. Configured: {list(self.providers)}. "
-                "Run `deepseek keys add` or set MISTRAL_API_KEY."
+                "Run `deepseek` and log in with your DeepSeek account."
             )
         return self.providers[name]
 

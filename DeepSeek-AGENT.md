@@ -1,49 +1,51 @@
 # DeepSeek-Agent 🚀
 
-This repository has been rebranded and rewired to run entirely on **DeepSeek** —
-the same endpoints as the official DeepSeek web app (`chat.deepseek.com`).
-
-It keeps the full autonomy engine (tools, RAG, memory, skills, safety, approvals)
-but swaps the LLM backend from Mistral API keys to a **DeepSeek account login**.
+This repository is **DeepSeek-native**: it talks to the same endpoints as the
+official DeepSeek web app (`chat.deepseek.com`), driven by a **DeepSeek account
+login** — no third-party model, no API keys. It keeps the full autonomy engine
+(tools, RAG, memory, skills, safety, approvals) on top of DeepSeek.
 
 ---
 
 ## What changed
 
-| Area | Before | Now (DeepSeek-Agent) |
-|---|---|---|
-| Backend | Mistral API keys | **DeepSeek account (email + password)** |
-| Login | paste API key | first-run wizard: email + password → token |
-| Token lifecycle | static keys | **auto-refresh / regenerate on expiry** (uses saved credentials) |
-| Model roles | mistral-* models | DeepSeek native modes: **instant · expert · vision** |
-| Tool calling | native function-calling | **text-based tool calling** (DeepSeek has no function API) |
-| Embeddings | mistral-embed | none → RAG falls back to **keyword search** |
-| Moderation | mistral-moderation | none (harness rules still enforce safety) |
+| Area | Now (DeepSeek-Agent) |
+|---|---|
+| Backend | **DeepSeek** (`chat.deepseek.com`) |
+| Login | first-run wizard: DeepSeek email + password → token |
+| Token lifecycle | **auto-refresh / regenerate on expiry** (uses saved credentials) |
+| Model roles | DeepSeek native modes: **instant · expert · vision** |
+| Tool calling | **text-based tool calling** (DeepSeek has no function API) |
+| Embeddings | none → RAG falls back to **keyword search** |
+| Moderation | none (harness rules still enforce safety) |
 
 ---
 
 ## How login works (the part that matters)
 
-DeepSeek's web app is behind **AWS WAF**, so a plain HTTP login is usually
-challenged. DeepSeek-Agent tries, in order:
+DeepSeek's web app is behind **AWS WAF**, which challenges desktop-browser
+user-agents. DeepSeek-Agent logs in with the **same request profile as the
+official Android app** (`requests` + the `DeepSeek/2.0.2 (Android; API)`
+user-agent), which the WAF lets through cleanly. The flow:
 
-1. **Direct HTTP login** — works when WAF is not challenging your IP.
-2. **Headless browser login** (Playwright + Chromium) — passes the WAF JS
-   challenge automatically. Auto-detected only when playwright is installed.
-3. **Paste a token** — if both of the above fail, the wizard asks you to paste
-   a token from your browser (always works).
+1. **Direct login** — `POST /api/v0/users/login` with email + password returns a
+   real bearer token (HTTP 200). No browser needed.
+2. **Proof-of-Work** — the completion endpoint requires a PoW response; the
+   agent solves it with a small bundled Node.js solver (WASM auto-downloaded
+   once). `nodejs` is required.
+3. **Paste a token** — if login is ever blocked, the wizard falls back to pasting
+   a token copied from chat.deepseek.com in your browser.
 
 The token is stored **only on your device** in `keys/deepseek_token`
-(chmod 600). Your email + password are stored in `keys/deepseek_account.json`
-(chmod 600). Both are gitignored.
+(`chmod 600`); email + password in `keys/deepseek_account.json` (`chmod 600`).
+Both are gitignored.
 
 When a token **expires or returns INVALID_TOKEN/401**, the provider
 **automatically re-logs-in with your saved credentials** to get a fresh token —
-so runs keep going without you.
+so long runs keep going without you.
 
-> **Termux note:** Chromium/Playwright do not run on Termux. On Android you'll
-> typically use the "paste a token" path (get it from chat.deepseek.com in your
-> browser), or run the browser login on a PC once and copy the saved token.
+> **Termux note:** no browser, no Playwright, no Chromium needed. This works
+> entirely with Python `requests` + Node.js, so it runs great on Termux.
 
 ### First run
 
@@ -80,9 +82,9 @@ The current mode is shown in the banner.
 
 ## Autonomy
 
-`DeepSeek-Agent` runs a **focused single strong agent** (the `solo` role) that
-has every tool: filesystem, shell, python, web, skills, RAG, memory, office,
-dbms, git. Any non-`/` input is treated as a goal:
+`DeepSeek-Agent` runs a **multi-agent system**: a router decides, a supervisor
+plans a task DAG, worker/coder/researcher agents execute with real tools, and a
+critic verifies. Any non-`/` input is treated as a goal:
 
 ```bash
 deepseek "build a todo API in the workspace and test it"
@@ -90,9 +92,9 @@ deepseek -m never "fix the bug in src/app.py"     # full autonomy, no confirmati
 ```
 
 Because DeepSeek has no function-calling API, tool use is **text-based**: the
-model emits `TOOL_CALL: {"name":..., "arguments":{...}}` (or the XML equivalent)
-and the harness executes it safely. Supports reasoning, verification, retries,
-and a final answer.
+model emits `TOOL_CALL: {"name":..., "arguments":{...}}` and the harness
+executes it safely. Supports reasoning, verification, retries, and a final
+answer.
 
 ---
 

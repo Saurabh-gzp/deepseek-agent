@@ -34,15 +34,6 @@ providers:
     data_dir: "./.deepseek"
     timeout: 180
 
-  mistral:
-    enabled: true
-    type: mistral                    # deepseek_agent/providers/mistral.py (optional fallback)
-    base_url: "https://api.mistral.ai/v1"
-    # keys come from the environment: MISTRAL_API_KEY, MISTRAL_API_KEY_2 ... or keys.json
-    env_keys: ["MISTRAL_API_KEY", "MISTRAL_API_KEY_2", "MISTRAL_API_KEY_3"]
-    timeout: 180
-    max_retries_per_key: 2
-
   openai:
     enabled: false
     type: openai_compatible
@@ -68,9 +59,6 @@ providers:
 # ----------------------------------------------------------
 # MODEL ROLES  (role -> model + fallback chain)
 # ----------------------------------------------------------
-# Roles use the STRONGEST model that still has usable org quota
-# (admin.mistral.ai 2026-08-26). 8 keys rotate on 429 — do NOT default
-# to 8B/3B when medium-2508 has 356k tok/min vs medium-latest 25k.
 # DeepSeek-Agent: every role runs on DeepSeek (native instant/expert/vision mode
 # is chosen globally with `/mode`; the model name is a placeholder — DeepSeek
 # uses its own web API and ignores it).
@@ -140,39 +128,11 @@ models:
 
 # ----------------------------------------------------------
 # RATE LIMITS  (requests per second per model)
-# Matched to the ACTUAL organization limits (admin.mistral.ai > Limits):
-#   ministral-3b-2512  12.50 rps | 1,500,000 tok/min
-#   ministral-8b-2512   3.13 rps |   625,000 tok/min
-#   ministral-14b-2512  0.50 rps |   937,500 tok/min
-#   mistral-small-2603  0.83 rps |    50,000 tok/min
-#   mistral-medium-latest   ~0.42 rps | 25,000 tok/min
-#   codestral-2508      2.08 rps |   628,000 tok/min
-#   devstral-2512       0.83 rps | 1,000,000 tok/min
-#   mistral-large-2512  0.07 rps |   250,000 tok/min
-#   mistral-embed-2312  1.00 rps | 20,000,000 tok/min
-#   codestral-embed     1.00 rps |    50,000 tok/min
-#   mistral-moderation-2603 ~1.00 rps | 50,000 tok/min
-# Client paces to ~85% of these; a 429 pushes the model's next slot out.
+# DeepSeek-Agent talks to chat.deepseek.com's web API (email+password login,
+# native instant/expert/vision modes). The DeepSeek provider paces itself;
+# this table is a light client-side throttle only. Model names are placeholders.
 # ----------------------------------------------------------
 rate_limits:
-  ministral-3b-2512: 10.0
-  ministral-8b-2512: 3.0
-  ministral-14b-2512: 0.45
-  mistral-small-2603: 0.75
-  mistral-medium-latest: 0.32
-  mistral-medium-2505: 0.40
-  mistral-medium-2508: 0.36
-  mistral-medium-2604: 0.5
-  voxtral-mini-2602: 1.4
-  voxtral-small-2507: 0.95
-  codestral-2508: 2.0
-  devstral-2512: 0.8
-  mistral-large-2512: 0.065
-  mistral-embed-2312: 0.95
-  codestral-embed: 0.95
-  mistral-moderation-2603: 0.95
-  pixtral-12b-2409: 0.8
-  pixtral-large-2411: 0.4
   deepseek-chat: 0.8
   default: 1.5
 
@@ -188,7 +148,6 @@ autonomy:
   task_timeout_seconds: 180
   overall_timeout_seconds: 1500
   large_model_calls_per_task: 1
-  max_devstral_parallel: 2
   auto_continue: true            # agent bina puche next step chalata rahe
   reflection_every: 4            # har N steps par self-reflection
 

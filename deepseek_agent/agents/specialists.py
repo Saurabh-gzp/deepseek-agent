@@ -39,7 +39,7 @@ MEM = ["remember", "index_knowledge"]
 
 # ======================================================================
 class RouterAgent(BaseAgent):
-    """Fast triage — ministral-3b. Classify, estimate, route."""
+    """Fast triage — DeepSeek (instant mode). Classify, estimate, route."""
     role_key = "router"
     agent_name = "router"
     allowed_tools = []
@@ -138,7 +138,7 @@ class RouterAgent(BaseAgent):
 
 # ======================================================================
 class SupervisorAgent(BaseAgent):
-    """Planner/orchestrator brain — mistral-medium. Plans DAG, replans on failure."""
+    """Planner/orchestrator brain — DeepSeek (expert mode). Plans DAG, replans on failure."""
     role_key = "supervisor"
     agent_name = "supervisor"
     allowed_tools = READ_ONLY + WEB + WRITE + MEM
@@ -182,7 +182,7 @@ class SupervisorAgent(BaseAgent):
         '    {"id":"t1","title":"short imperative title",\n'
         '     "description":"precise instructions incl. filenames/commands the agent must use",\n'
         '     "agent":"researcher|worker|coder|critic",\n'
-        '     "model":"OPTIONAL exact model for THIS task (e.g. codestral-2508), else empty",\n'
+        '     "model":"OPTIONAL exact DeepSeek mode for THIS task (e.g. deepseek-expert), else empty",\n'
         '     "depends_on":[],\n'
         '     "skill":"optional skill_id from the catalog",\n'
         '     "acceptance":"objective, checkable success criterion",\n'
@@ -190,16 +190,17 @@ class SupervisorAgent(BaseAgent):
         "  ],\n"
         '  "final_deliverable": "what the user receives at the end"\n'
         "}\n"
-        "MODEL CAPABILITY TABLE — assign every task to the agent whose MODEL best fits it:\n"
-        "- coder = codestral-2508 (quick/small edits) / devstral-2512 (repo-scale work): "
+        "MODEL CAPABILITY TABLE — every specialist runs on DeepSeek. Assign each task "
+        "to the agent whose ROLE best fits it (all DeepSeek, expert mode default, "
+        "instant for quick data work, vision for image tasks):\n"
+        "- coder (deepseek-expert): "
         "writing or FIXING code, debugging, running builds/tests, DESIGN DOCS + MOCKUPS, WEBSITE CODING + UI/UX "
-        "implementation, any \"bug fix\" request. codestral for small/single-file edits; "
-        "devstral for multi-file/repository tasks.\n"
-        "- researcher = mistral-small-2603: web research, live info (weather, news, prices), "
+        "implementation, any \"bug fix\" request. Repo-scale / multi-file work also goes here.\n"
+        "- researcher (deepseek-expert): web research, live info (weather, news, prices), "
         "documents, citations.\n"
-        "- worker = mistral-small-2603 (ministral-14b-2512 fallback): "
+        "- worker (deepseek-instant): "
         "data shaping, summaries, formatting, comparisons, DEVICE/SYSTEM queries, simple file ops. NEVER code, never design/UI/mockups, never website work — those always go to coder.\n"
-        "- critic = mistral-medium-latest: verification ONLY, and only if the goal explicitly "
+        "- critic (deepseek-expert): verification ONLY, and only if the goal explicitly "
         "demands verification.\n"
         "Rules:\n"
         "- 2 to 8 tasks. Fewer, meatier tasks beat many tiny ones.\n"
@@ -239,10 +240,9 @@ class SupervisorAgent(BaseAgent):
         "goal said projects/varanasi-hub, plan used complete-varanasi-digital, and the "
         "acceptance check failed the task forever.\n"
 
-        "- Set \"model\" only when one exact model must run that task. IMPORTANT: any task that "
-        "must CALL TOOLS (shell, files, start_server...) gets devstral-2512 — codestral-2508 "
-        "is TEXT-ONLY on some accounts (it answered with zero tool calls in live runs). "
-        "Otherwise leave model empty and the role chain decides.\n"
+        "- Set \"model\" only when one exact DeepSeek mode must run that task (deepseek-expert, "
+        "deepseek-instant or deepseek-vision). Otherwise leave it empty and the role chain "
+        "decides. All tool-calling runs on DeepSeek expert mode.\n"
         "- EXISTING PROJECT (project memory): if CONTEXT contains 'EXISTING PROJECT "
         "DETECTED', the goal is a FOLLOW-UP on work that already exists: task 1 = "
         "'list_dir + read_file the project's TASKS.md/README/main sources to confirm "
@@ -329,13 +329,13 @@ class SupervisorAgent(BaseAgent):
             return self._fallback_plan(goal, "no valid JSON in plan output")
         return self._sanitize(plan, goal)
 
-    # Only these models may be pinned per-task by the supervisor; anything
+    # Only these model names may be pinned per-task by the supervisor; anything
     # else is dropped so a stray LLM answer can never inject an unknown model.
+    # Everything runs on DeepSeek's native modes (the web API ignores the name;
+    # it only selects instant/expert/vision via the chat payload).
     PINNABLE_MODELS = {
-        "codestral-2508", "devstral-2512",
-        "mistral-small-2603", "mistral-medium-latest",
-        "mistral-medium-2508", "mistral-medium-2604",
-        "ministral-8b-2512", "ministral-14b-2512", "ministral-3b-2512",
+        "deepseek-chat", "deepseek-reasoner",
+        "deepseek-expert", "deepseek-instant", "deepseek-vision",
     }
 
     def _sanitize(self, plan: Dict[str, Any], goal: str) -> Dict[str, Any]:
@@ -810,7 +810,14 @@ class DeepSeekSoloAgent(BaseAgent):
         "paths). Use run_shell for real shell commands and run_python for computation.\n"
         "HOSTING: use the start_server tool (not run_shell) and verify with a real "
         "HTTP 200 + content check before claiming a site is live.\n"
-        "When finished, reply with your final answer in normal text — no tool-call line."
+        "COMPLETION RULE (critical): do NOT finish after merely creating files. You must "
+        "EXECUTE and VERIFY every step the user explicitly asked for. If the user asks "
+        "you to run something, build a project, test it, or 'run it end-to-end', you MUST "
+        "actually call the tools to run it and report the REAL output — never stop at "
+        "\"I created the file\" or \"the approach is sound\". Keep calling tools until the "
+        "whole request is demonstrably done.\n"
+        "When everything requested is actually done and verified, reply with your final "
+        "answer in normal text — no tool-call line."
     )
 
 
