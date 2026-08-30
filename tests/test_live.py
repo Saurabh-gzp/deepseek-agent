@@ -14,11 +14,11 @@ for line in (ROOT / ".env").read_text().splitlines() if (ROOT / ".env").exists()
         k, v = line.split("=", 1)
         os.environ.setdefault(k.strip(), v.strip())
 
-from nexus.cli.ui import UI                       # noqa: E402
-from nexus.core.config import get_config          # noqa: E402
-from nexus.core.context import AgentContext       # noqa: E402
-from nexus.llm.client import LLMClient            # noqa: E402
-from nexus.orchestrator.engine import Orchestrator  # noqa: E402
+from deepseek_agent.cli.ui import UI                       # noqa: E402
+from deepseek_agent.core.config import get_config          # noqa: E402
+from deepseek_agent.core.context import AgentContext       # noqa: E402
+from deepseek_agent.llm.client import LLMClient            # noqa: E402
+from deepseek_agent.orchestrator.engine import Orchestrator  # noqa: E402
 
 PASS, FAIL = [], []
 
@@ -33,7 +33,7 @@ def main() -> int:
     ui = UI("cyber", verbose=False)
     cfg = get_config()
     cfg.set("safety.approval_mode", "never")
-    cfg.set("app.workspace", str(ROOT / ".nexus" / "livetest"))
+    cfg.set("app.workspace", str(ROOT / ".deepseek" / "livetest"))
     print("\n\033[96m━━━ LIVE INTEGRATION TESTS ━━━\033[0m\n")
 
     # --- 1. provider + keys
@@ -54,7 +54,7 @@ def main() -> int:
 
     # --- 3. failover with a broken key
     print("\n3. Key failover")
-    from nexus.providers.keyring import KeyRing
+    from deepseek_agent.providers.keyring import KeyRing
     ring = llm.registry.keyrings.get("mistral")
     if ring and len(ring) >= 1:
         bad = ring.add_key("INVALID_KEY_FOR_FAILOVER_TEST")
@@ -76,7 +76,7 @@ def main() -> int:
     ctx = AgentContext(cfg, ui, lambda l, m: None)
     try:
         n = ctx.rag.index_text(
-            "Nexus uses a KeyRing to rotate API keys. When a key returns HTTP 401 it is "
+            "DeepSeek-Agent uses a KeyRing to rotate API keys. When a key returns HTTP 401 it is "
             "marked DEAD and the next healthy key is used automatically.",
             "test://failover", {"kind": "test"})
         check("indexing works", n > 0, f"{n} chunks")
@@ -96,7 +96,7 @@ def main() -> int:
 
     # --- 6. tool calling loop
     print("\n6. Tools + agent loop")
-    from nexus.agents.specialists import WorkerAgent
+    from deepseek_agent.agents.specialists import WorkerAgent
     w = WorkerAgent(ctx)
     out = w.run("Use run_python to compute 17*23 and report ONLY the number.")
     check("agent used a tool", any(s.kind == "tool" for s in out.steps), out.step_summary())
@@ -104,7 +104,7 @@ def main() -> int:
 
     # --- 7. router
     print("\n7. Router")
-    from nexus.agents.specialists import RouterAgent
+    from deepseek_agent.agents.specialists import RouterAgent
     r1 = RouterAgent(ctx).route("hi there")
     check("trivial -> direct answer", not r1.get("needs_orchestration"), r1.get("intent", ""))
     r2 = RouterAgent(ctx).route("build me a REST API with tests and docs")

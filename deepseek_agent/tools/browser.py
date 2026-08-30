@@ -117,12 +117,12 @@ def _describe_page(page, max_chars: int = _MAX_TEXT) -> str:
 
 
 class BrowserTools:
-    """Registered as nexus tools; all share _SESSION."""
+    """Registered as DeepSeek-Agent tools; all share _SESSION."""
 
     def __init__(self, workspace: Path = None) -> None:
         # screenshots with relative paths resolve against the WORKSPACE root
         # (same contract as run_shell/write_file), NOT the process CWD.
-        # Live bug: 'login_page.png' landed next to nexus.py and the critic
+        # Live bug: 'login_page.png' landed next to deepseek.py and the critic
         # (rightly) failed the task — file missing from the workspace.
         self.root = Path(workspace).resolve() if workspace else Path.cwd()
 

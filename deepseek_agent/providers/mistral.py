@@ -88,7 +88,7 @@ class MistralProvider(BaseProvider):
                     "Authorization": f"Bearer {key.value}",
                     "Content-Type": "application/json",
                     "Accept": "application/json",
-                    "User-Agent": "nexus-agent/1.0",
+                    "User-Agent": "deepseek-agent/2.0",
                 },
                 method="POST",
             )

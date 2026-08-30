@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════
-#  NEXUS AGENT — one-command setup
+#  DEEPSEEK-AGENT — one-command setup
 #  Usage:   bash setup.sh          (fresh install: deps + key purge)
 #           bash setup.sh --update (update: deps only, KEEP your keys)
 # ═══════════════════════════════════════════════════════════════
@@ -73,8 +73,8 @@ if [ "$UPDATE_MODE" = "1" ]; then
     ok "Keys/config left untouched"
 else
     step "Checking for data from an older install"
-    if [ -d .nexus ] || [ -f .env ] || [ -d keys ]; then
-        rm -rf .nexus .env keys
+    if [ -d .deepseek ] || [ -f .env ] || [ -d keys ]; then
+        rm -rf .deepseek .env keys
         ok "Old keys/config removed — a fresh wizard will run"
     else
         ok "No previous config — completely fresh install"
@@ -123,13 +123,13 @@ else
 fi
 
 # 5c. Write the wrapper
-printf '#!/usr/bin/env bash\nexec python3 "%s/nexus.py" "$@"\n' "$REPO_DIR" > "$BIN_DIR/deepseek"
+printf '#!/usr/bin/env bash\nexec python3 "%s/deepseek.py" "$@"\n' "$REPO_DIR" > "$BIN_DIR/deepseek"
 chmod +x "$BIN_DIR/deepseek"
 ok "'deepseek' command installed → $BIN_DIR/deepseek"
 
 # ── 6. Sanity: launcher import test ────────────────────────────
 step "Self-test"
-python3 -c "from nexus.cli.app import main" 2>/dev/null \
+python3 -c "from deepseek_agent.cli.app import main" 2>/dev/null \
     && ok "Agent core loaded" \
     || die "core import failed — please open an issue"
 
@@ -140,7 +140,7 @@ ${BOLD}To launch the agent, just type:${R}
 
     ${CYAN}deepseek${R}
 
-(and ${CYAN}python3 nexus.py${R} still works too)
+(and ${CYAN}python3 deepseek.py${R} still works too)
 
 On the first run the agent opens a login wizard and asks for your
 ${BOLD}DeepSeek${R} account email + password (the official chat.deepseek.com

@@ -10,15 +10,15 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from nexus.core.config import Config, get_config          # noqa: E402
-from nexus.orchestrator.dag import Task, TaskDAG, TaskStatus  # noqa: E402
-from nexus.providers.keyring import ApiKey, KeyRing, KeyState  # noqa: E402
-from nexus.rag.engine import chunk_text                    # noqa: E402
-from nexus.rag.store import VectorStore                    # noqa: E402
-from nexus.skills.loader import SkillLibrary               # noqa: E402
-from nexus.tools.base import Risk, ToolRegistry, ToolResult  # noqa: E402
-from nexus.tools.filesystem import FileSystemTools         # noqa: E402
-from nexus.tools.shell import ShellTools                   # noqa: E402
+from deepseek_agent.core.config import Config, get_config          # noqa: E402
+from deepseek_agent.orchestrator.dag import Task, TaskDAG, TaskStatus  # noqa: E402
+from deepseek_agent.providers.keyring import ApiKey, KeyRing, KeyState  # noqa: E402
+from deepseek_agent.rag.engine import chunk_text                    # noqa: E402
+from deepseek_agent.rag.store import VectorStore                    # noqa: E402
+from deepseek_agent.skills.loader import SkillLibrary               # noqa: E402
+from deepseek_agent.tools.base import Risk, ToolRegistry, ToolResult  # noqa: E402
+from deepseek_agent.tools.filesystem import FileSystemTools         # noqa: E402
+from deepseek_agent.tools.shell import ShellTools                   # noqa: E402
 
 
 # ======================= KeyRing / failover =========================
@@ -47,7 +47,7 @@ class TestKeyRing:
         import io
         import urllib.error
         from email.message import Message
-        import nexus.providers.mistral as mm
+        import deepseek_agent.providers.mistral as mm
         ring = KeyRing("mistral", ["a", "b", "c"])
         prov = mm.MistralProvider({"max_key_rotations_per_call": 0}, ring,
                                   notifier=lambda *a, **k: None)
@@ -224,8 +224,8 @@ class TestShell:
         return ShellTools(tmp_path, timeout=20)
 
     def test_run_ok(self, sh):
-        r = sh.run_shell("echo nexus-ok")
-        assert r.ok and "nexus-ok" in r.output
+        r = sh.run_shell("echo deepseek-ok")
+        assert r.ok and "deepseek-ok" in r.output
 
     def test_exit_code_captured(self, sh):
         assert not sh.run_shell("exit 3").ok
@@ -412,17 +412,17 @@ class TestWebSearchEngines:
     """v1.7: multi-engine search — parser correctness, cache, demotion."""
 
     def test_ddg_parser_and_unwrap(self):
-        from nexus.tools.web import _engine_ddg_html, _ddg_unwrap
+        from deepseek_agent.tools.web import _engine_ddg_html, _ddg_unwrap
         # uddg redirects unwrap to real urls; ad links dropped
         assert _ddg_unwrap("https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fpage&rut=x") \
             == "https://example.com/page"
         # we do not hit the network here; parsing proven via the norm/dedup layer
-        from nexus.tools.web import _norm_url
+        from deepseek_agent.tools.web import _norm_url
         assert _norm_url("https://WWW.Example.com/path/?utm_source=x") == "https://example.com/path"
         assert _norm_url("https://example.com/path/") == "https://example.com/path"
 
     def test_bing_ck_a_unwrap(self):
-        from nexus.tools.web import _bing_unwrap
+        from deepseek_agent.tools.web import _bing_unwrap
         import base64, html as _html
         target = "https://real-site.example/article"
         b64 = base64.b64encode(target.encode()).decode().replace("+", "-").replace("/", "_")
@@ -431,7 +431,7 @@ class TestWebSearchEngines:
         assert _bing_unwrap("https://example.com/plain") == "https://example.com/plain"
 
     def test_cache_serves_repeat_without_engine_hits(self):
-        import nexus.tools.web as web
+        import deepseek_agent.tools.web as web
         calls = []
         def fake_engine(query, n):
             calls.append(query)
@@ -450,7 +450,7 @@ class TestWebSearchEngines:
             web.ENGINES, web.DEFAULT_ORDER = old, old_order
 
     def test_failed_engine_demoted_then_others_tried(self):
-        import nexus.tools.web as web
+        import deepseek_agent.tools.web as web
         order = []
         def fail_engine(query, n):
             order.append("a")
@@ -474,7 +474,7 @@ class TestWebSearchEngines:
             web.ENGINES, web.DEFAULT_ORDER = old, old_order
 
     def test_merge_dedups_urls_across_engines(self):
-        import nexus.tools.web as web
+        import deepseek_agent.tools.web as web
         def e1(query, n):
             return [{"title": "dup", "url": "https://z.example/x", "snippet": "1"},
                     {"title": "u2", "url": "https://z.example/y", "snippet": "2"}]
@@ -510,7 +510,7 @@ if __name__ == "__main__":
 
 
 # ======================== JSON extraction ===========================
-from nexus.core.jsonutil import extract_field, extract_json  # noqa: E402
+from deepseek_agent.core.jsonutil import extract_field, extract_json  # noqa: E402
 
 
 class TestJsonUtil:
@@ -552,7 +552,7 @@ class TestJsonUtil:
 class TestCriticParsing:
     @staticmethod
     def parse(text, res=None):
-        from nexus.agents.specialists import CriticAgent
+        from deepseek_agent.agents.specialists import CriticAgent
         return CriticAgent._parse(text, res)
 
     def test_clean_json(self):
@@ -573,7 +573,7 @@ class TestCriticParsing:
         assert v["verdict"] == "fail"
 
     def test_tool_evidence_lifts_ambiguous(self):
-        from nexus.agents.base import AgentOutcome, AgentStep
+        from deepseek_agent.agents.base import AgentOutcome, AgentStep
         res = AgentOutcome("critic", True, "hmm", [AgentStep(0, "tool", tool="run_shell", ok=True)])
         assert self.parse("Ambiguous commentary.", res)["verdict"] == "pass"
 
@@ -587,9 +587,9 @@ class TestCriticParsing:
 
 def test_critic_can_execute():
     """Regression: critic previously lacked run_shell/run_python and claimed 'tool limitations'."""
-    from nexus.core.config import get_config
-    from nexus.tools.base import ToolRegistry
-    from nexus.tools.shell import ShellTools
+    from deepseek_agent.core.config import get_config
+    from deepseek_agent.tools.base import ToolRegistry
+    from deepseek_agent.tools.shell import ShellTools
     reg = ToolRegistry()
     ShellTools(get_config().workspace).register(reg)
     names = [s["function"]["name"] for s in reg.specs_for("critic")]
@@ -636,7 +636,7 @@ class TestFailoverResilience:
 
 class TestRateLimiter:
     def test_paces_sequential_calls(self):
-        from nexus.llm.client import RateLimiter
+        from deepseek_agent.llm.client import RateLimiter
         rl = RateLimiter(margin=1.0)
         t0 = time.time()
         for _ in range(3):
@@ -645,7 +645,7 @@ class TestRateLimiter:
 
     def test_parallel_threads_do_not_burst(self):
         import threading
-        from nexus.llm.client import RateLimiter
+        from deepseek_agent.llm.client import RateLimiter
         rl = RateLimiter(margin=1.0)
         stamps = []
         lock = threading.Lock()
@@ -666,7 +666,7 @@ class TestRateLimiter:
         assert all(b - a > 0.05 for a, b in zip(stamps, stamps[1:]))
 
     def test_penalise_delays_next(self):
-        from nexus.llm.client import RateLimiter
+        from deepseek_agent.llm.client import RateLimiter
         rl = RateLimiter()
         rl.penalise("m", 0.3)
         t0 = time.time()
@@ -677,7 +677,7 @@ class TestRateLimiter:
 # ======================= Router safety net ==========================
 class TestRouterGuard:
     def test_delete_request_forced_to_orchestration(self):
-        from nexus.orchestrator.engine import router_guard
+        from deepseek_agent.orchestrator.engine import router_guard
         # the router model wrongly answered directly ("Deleted!") — the guard
         # must stop it because the request is an ACTION
         d, overridden = router_guard(
@@ -689,30 +689,30 @@ class TestRouterGuard:
         assert d["direct_answer"] == ""
 
     def test_action_verb_overrides_even_chat_intent(self):
-        from nexus.orchestrator.engine import router_guard
+        from deepseek_agent.orchestrator.engine import router_guard
         d, overridden = router_guard(
             "make a hello.py file",
             {"intent": "chat", "needs_orchestration": False, "direct_answer": "Done!"})
         assert overridden is True and d["needs_orchestration"] is True
 
     def test_greeting_direct_answer_kept(self):
-        from nexus.orchestrator.engine import router_guard
+        from deepseek_agent.orchestrator.engine import router_guard
         d, overridden = router_guard(
             "hello, who are you?",
             {"intent": "chat", "needs_orchestration": False,
-             "direct_answer": "Hello! I am the Nexus agent."})
+             "direct_answer": "Hello! I am the DeepSeek-Agent."})
         assert overridden is False
         assert d["direct_answer"].startswith("Hello")
 
     def test_simple_question_direct_answer_kept(self):
-        from nexus.orchestrator.engine import router_guard
+        from deepseek_agent.orchestrator.engine import router_guard
         d, overridden = router_guard(
             "what is the capital of France?",
             {"intent": "question", "needs_orchestration": False, "direct_answer": "Paris"})
         assert overridden is False and d["direct_answer"] == "Paris"
 
     def test_action_claim_in_answer_text_blocked(self):
-        from nexus.orchestrator.engine import router_guard
+        from deepseek_agent.orchestrator.engine import router_guard
         d, overridden = router_guard(
             "should I learn python?",
             {"intent": "question", "needs_orchestration": False,
@@ -745,27 +745,27 @@ class TestPathNormalization:
 # ======================= Approval policy ===========================
 class TestApprovalPolicy:
     def test_delete_path_classified_delete_files(self):
-        from nexus.core.config import get_config
-        from nexus.safety.guard import SafetyGuard
+        from deepseek_agent.core.config import get_config
+        from deepseek_agent.safety.guard import SafetyGuard
         g = SafetyGuard(get_config(), llm=None)
         assert g.classify_action("delete_path", {"path": "x"}) == "delete_files"
 
     def test_delete_path_needs_approval(self):
-        from nexus.core.config import get_config
-        from nexus.safety.guard import SafetyGuard
+        from deepseek_agent.core.config import get_config
+        from deepseek_agent.safety.guard import SafetyGuard
         g = SafetyGuard(get_config(), llm=None)
         ok, action = g.needs_approval("delete_path", {"path": "x"})
         assert ok is True and action == "delete_files"
 
     def test_ctx_approve_prompts_handler_for_destructive(self, tmp_path):
-        from nexus.core.context import AgentContext
-        from nexus.tools.filesystem import FileSystemTools
+        from deepseek_agent.core.context import AgentContext
+        from deepseek_agent.tools.filesystem import FileSystemTools
         cfg = get_config()
         cfg.set("app.workspace", str(tmp_path))
         ctx = AgentContext.__new__(AgentContext)   # lightweight, no LLM
         ctx.config = cfg
         ctx.tools = type("R", (), {"get": staticmethod(lambda n: None)})()
-        from nexus.tools.base import ToolRegistry
+        from deepseek_agent.tools.base import ToolRegistry
         ctx.tools = ToolRegistry()
         FileSystemTools(tmp_path).register(ctx.tools)
         ctx.state = {"approved_always": set()}
@@ -775,9 +775,9 @@ class TestApprovalPolicy:
         assert seen == ["delete_path"]              # human approval requested
 
     def test_readonly_needs_no_approval(self, tmp_path):
-        from nexus.core.context import AgentContext
-        from nexus.tools.base import ToolRegistry
-        from nexus.tools.filesystem import FileSystemTools
+        from deepseek_agent.core.context import AgentContext
+        from deepseek_agent.tools.base import ToolRegistry
+        from deepseek_agent.tools.filesystem import FileSystemTools
         cfg = get_config()
         cfg.set("app.workspace", str(tmp_path))
         ctx = AgentContext.__new__(AgentContext)
@@ -792,8 +792,8 @@ class TestApprovalPolicy:
 # ======================= Shell-delete approval ======================
 class TestShellDeleteApproval:
     def test_rm_any_flags_classified_delete(self):
-        from nexus.core.config import get_config
-        from nexus.safety.guard import SafetyGuard
+        from deepseek_agent.core.config import get_config
+        from deepseek_agent.safety.guard import SafetyGuard
         g = SafetyGuard(get_config(), llm=None)
         assert g.classify_action("run_shell", {"command": "rm -f todo.py"}) == "delete_files"
         assert g.classify_action("run_shell", {"command": "rm -rf build/"}) == "delete_files"
@@ -801,11 +801,11 @@ class TestShellDeleteApproval:
         assert g.classify_action("run_shell", {"command": "ls -la"}) is None
 
     def test_ctx_approve_consults_guard_for_shell_rm(self, tmp_path):
-        from nexus.core.context import AgentContext
-        from nexus.safety.guard import SafetyGuard
-        from nexus.tools.base import ToolRegistry
-        from nexus.tools.filesystem import FileSystemTools
-        from nexus.tools.shell import ShellTools
+        from deepseek_agent.core.context import AgentContext
+        from deepseek_agent.safety.guard import SafetyGuard
+        from deepseek_agent.tools.base import ToolRegistry
+        from deepseek_agent.tools.filesystem import FileSystemTools
+        from deepseek_agent.tools.shell import ShellTools
         cfg = get_config()
         cfg.set("app.workspace", str(tmp_path))
         ctx = AgentContext.__new__(AgentContext)
@@ -836,8 +836,8 @@ class TestShellDeleteApproval:
 # ======================= run_python delete evasion ==================
 class TestPythonDeleteEvasion:
     def test_os_remove_classified(self):
-        from nexus.core.config import get_config
-        from nexus.safety.guard import SafetyGuard
+        from deepseek_agent.core.config import get_config
+        from deepseek_agent.safety.guard import SafetyGuard
         g = SafetyGuard(get_config(), llm=None)
         cases = [
             {"code": "import os\nos.remove('todo.py')"},
@@ -851,9 +851,9 @@ class TestPythonDeleteEvasion:
         assert g.classify_action("run_python", {"code": "print(2+2)"}) is None
 
     def test_ctx_approve_blocks_python_delete(self, tmp_path):
-        from nexus.core.context import AgentContext
-        from nexus.safety.guard import SafetyGuard
-        from nexus.tools.base import ToolRegistry
+        from deepseek_agent.core.context import AgentContext
+        from deepseek_agent.safety.guard import SafetyGuard
+        from deepseek_agent.tools.base import ToolRegistry
         cfg = get_config()
         cfg.set("app.workspace", str(tmp_path))
         ctx = AgentContext.__new__(AgentContext)
@@ -873,10 +873,10 @@ class TestPythonDeleteEvasion:
 # ======================= Denied-path freeze =========================
 class TestDeniedPathFreeze:
     def _ctx(self, tmp_path):
-        from nexus.core.context import AgentContext
-        from nexus.safety.guard import SafetyGuard
-        from nexus.tools.base import ToolRegistry
-        from nexus.tools.filesystem import FileSystemTools
+        from deepseek_agent.core.context import AgentContext
+        from deepseek_agent.safety.guard import SafetyGuard
+        from deepseek_agent.tools.base import ToolRegistry
+        from deepseek_agent.tools.filesystem import FileSystemTools
         cfg = get_config()
         cfg.set("app.workspace", str(tmp_path))
         ctx = AgentContext.__new__(AgentContext)
@@ -911,7 +911,7 @@ class TestDeniedPathFreeze:
         assert ctx.approve("run_python", {"code": "print(1)"}, "worker") is True
 
     def test_action_targets_extraction(self):
-        from nexus.core.context import AgentContext
+        from deepseek_agent.core.context import AgentContext
         t = AgentContext._action_targets("run_shell", {"command": "rm -f todo.py now"})
         assert any(x.endswith("todo.py") for x in t)
         t = AgentContext._action_targets("move_path", {"src": "a.txt", "dst": "b.txt"})
@@ -921,10 +921,10 @@ class TestDeniedPathFreeze:
 # ============ live-found: delete_path deny -> move_path workaround =========
 class TestDeleteDenyBlocksMove:
     def test_move_blocked_after_delete_path_denied(self, tmp_path):
-        from nexus.core.context import AgentContext
-        from nexus.safety.guard import SafetyGuard
-        from nexus.tools.base import ToolRegistry
-        from nexus.tools.filesystem import FileSystemTools
+        from deepseek_agent.core.context import AgentContext
+        from deepseek_agent.safety.guard import SafetyGuard
+        from deepseek_agent.tools.base import ToolRegistry
+        from deepseek_agent.tools.filesystem import FileSystemTools
         cfg = get_config()
         cfg.set("app.workspace", str(tmp_path))
         ctx = AgentContext.__new__(AgentContext)
@@ -950,8 +950,8 @@ class TestDeleteDenyBlocksMove:
 # ============ live-found: memory pollution + find/python evasions ============
 class TestPlanPollutionAndEvasions:
     def test_find_delete_caught(self):
-        from nexus.core.config import get_config
-        from nexus.safety.guard import SafetyGuard
+        from deepseek_agent.core.config import get_config
+        from deepseek_agent.safety.guard import SafetyGuard
         g = SafetyGuard(get_config(), llm=None)
         assert g.classify_action("run_shell",
             {"command": "find . -name squares.txt -delete"}) == "delete_files"
@@ -959,10 +959,10 @@ class TestPlanPollutionAndEvasions:
             {"command": "python -c \"import os; os.remove('x')\""}) == "delete_files"
 
     def test_frozen_name_blocked_even_in_python_code(self, tmp_path):
-        from nexus.core.context import AgentContext
-        from nexus.safety.guard import SafetyGuard
-        from nexus.tools.base import ToolRegistry
-        from nexus.tools.filesystem import FileSystemTools
+        from deepseek_agent.core.context import AgentContext
+        from deepseek_agent.safety.guard import SafetyGuard
+        from deepseek_agent.tools.base import ToolRegistry
+        from deepseek_agent.tools.filesystem import FileSystemTools
         cfg = get_config(); cfg.set("app.workspace", str(tmp_path))
         ctx = AgentContext.__new__(AgentContext)
         ctx.config = cfg; ctx.tools = ToolRegistry()
@@ -985,7 +985,7 @@ class TestPlanPollutionAndEvasions:
     def test_plan_context_excludes_task_summaries(self):
         """Engine gives the supervisor only preferences, not semantic memory."""
         import inspect
-        from nexus.orchestrator import engine as eng
+        from deepseek_agent.orchestrator import engine as eng
         src = inspect.getsource(eng.Orchestrator.handle)
         assert "plan_ctx" in src and "supervisor.plan(goal, plan_ctx)" in src
 
@@ -1028,8 +1028,8 @@ class TestDeletionChokePoint:
         assert res.ok is True and "42" in res.output
 
     def test_move_to_trash_needs_approval(self):
-        from nexus.core.config import get_config
-        from nexus.safety.guard import SafetyGuard
+        from deepseek_agent.core.config import get_config
+        from deepseek_agent.safety.guard import SafetyGuard
         g = SafetyGuard(get_config(), llm=None)
         assert g.classify_action("move_path", {"src": "a.txt", "dst": ".trash/a.txt"}) == "delete_files"
         assert g.classify_action("move_path", {"src": "a.txt", "dst": "b.txt"}) is None
@@ -1038,14 +1038,14 @@ class TestDeletionChokePoint:
 # ============ v1.2: math fast-path, device guard, project isolation ========
 class TestV12:
     def test_quick_math_correct(self):
-        from nexus.orchestrator.engine import quick_math
+        from deepseek_agent.orchestrator.engine import quick_math
         assert quick_math("8282+282282") is not None
         assert "290,564" in quick_math("8282+282282")
         assert quick_math("hello world") is None
         assert quick_math("(45*2)+10") is not None and "100" in quick_math("(45*2)+10")
 
     def test_router_guard_forces_math_and_device(self):
-        from nexus.orchestrator.engine import router_guard
+        from deepseek_agent.orchestrator.engine import router_guard
         d, o = router_guard("8282+282282", {"intent": "question",
                                             "needs_orchestration": False,
                                             "direct_answer": "601144"})
@@ -1071,15 +1071,15 @@ class TestV12:
         assert fs.write_file("loose.txt", "x").ok is True   # scope cleared
 
     def test_system_info_includes_device_probes(self, tmp_path):
-        from nexus.tools.shell import ShellTools
+        from deepseek_agent.tools.shell import ShellTools
         sh = ShellTools(tmp_path, 10, [])
         res = sh.system_info()
         assert res.ok is True
         assert "battery" in res.output.lower() or "storage" in res.output.lower()
 
     def test_project_slug_applied_to_tasks(self, tmp_path):
-        from nexus.orchestrator.engine import Orchestrator
-        from nexus.orchestrator.dag import Task, TaskDAG, TaskStatus
+        from deepseek_agent.orchestrator.engine import Orchestrator
+        from deepseek_agent.orchestrator.dag import Task, TaskDAG, TaskStatus
         import types
         eng = Orchestrator.__new__(Orchestrator)
         eng.ctx = types.SimpleNamespace(
@@ -1105,7 +1105,7 @@ class TestKeyManager:
         return cfg
 
     def test_add_list_remove_cycle(self, tmp_path):
-        from nexus.core.keymanager import KeyManager, mask
+        from deepseek_agent.core.keymanager import KeyManager, mask
         km = KeyManager(self._cfg(tmp_path))
         assert km.add("mistral", "k111111111111111111") is True
         assert km.add("mistral", "k111111111111111111") is False   # dedup
@@ -1117,7 +1117,7 @@ class TestKeyManager:
         assert mask("abcdefghijklmnop") == "abcd…mnop"
 
     def test_file_permissions_and_shape(self, tmp_path):
-        from nexus.core.keymanager import KeyManager
+        from deepseek_agent.core.keymanager import KeyManager
         import json, os
         km = KeyManager(self._cfg(tmp_path))
         km.add("mistral", "sk-XYZ123456789012345")
@@ -1127,7 +1127,7 @@ class TestKeyManager:
         assert oct(os.stat(f).st_mode)[-3:] == "600"
 
     def test_all_and_migrate_legacy(self, tmp_path):
-        from nexus.core.keymanager import KeyManager
+        from deepseek_agent.core.keymanager import KeyManager
         legacy = tmp_path / "keys.json"
         legacy.write_text('{"mistral": ["kAAAAABBBBBCCCCC1", "kAAAAABBBBBCCCCC2"]}')
         km = KeyManager(self._cfg(tmp_path))
@@ -1143,11 +1143,11 @@ class TestKeyManager:
         assert ring.remove_key("zzz") is False
 
     def test_completer_lists_all_commands(self):
-        from nexus.cli.completer import COMMANDS, _HAS_PT, NexusCompleter
+        from deepseek_agent.cli.completer import COMMANDS, _HAS_PT, DeepSeekCompleter
         assert "/key" in COMMANDS and "/help" in COMMANDS
         if _HAS_PT:
             from prompt_toolkit.document import Document
-            c = NexusCompleter({"/agent": ["coder", "worker"]})
+            c = DeepSeekCompleter({"/agent": ["coder", "worker"]})
             cmds = [comp.text for comp in c.get_completions(
                 Document("/"), None)]
             assert "/help" in cmds and "/key" in cmds
@@ -1159,7 +1159,7 @@ class TestKeyManager:
 # ======================= v1.4: unified keys + wizard helpers ===========
 class TestUnifiedKeys:
     def test_env_and_file_keys_one_list(self):
-        from nexus.core.keymanager import unified_keys
+        from deepseek_agent.core.keymanager import unified_keys
         ring = KeyRing("mistral", ["ENVKEY1111111111111"])
         u = unified_keys(["FILEKEY111111111111"], ring)
         assert [x["src"] for x in u] == ["keys/", ".env"]
@@ -1167,20 +1167,20 @@ class TestUnifiedKeys:
         assert u[0]["masked"].startswith("FILE")
 
     def test_dup_across_sources_removed(self):
-        from nexus.core.keymanager import unified_keys
+        from deepseek_agent.core.keymanager import unified_keys
         ring = KeyRing("mistral", ["SAMEKEYAAAAAAAAAAA"])
         u = unified_keys(["SAMEKEYAAAAAAAAAAA"], ring)
         assert len(u) == 1 and u[0]["src"] == "keys/"
 
     def test_empty(self):
-        from nexus.core.keymanager import unified_keys
+        from deepseek_agent.core.keymanager import unified_keys
         assert unified_keys([], None) == []
 
 
 # ============ v1.4.1: persona + script + live-info guard ==============
 class TestPersonaAndLiveGuard:
     def test_live_info_forced_to_researcher(self):
-        from nexus.orchestrator.engine import router_guard
+        from deepseek_agent.orchestrator.engine import router_guard
         for q in ["what's the weather today in delhi",
                   "whats the weather today",
                   "what is the bitcoin price",
@@ -1191,22 +1191,22 @@ class TestPersonaAndLiveGuard:
             assert d["direct_answer"] == ""
 
     def test_router_prompt_has_persona_rules(self):
-        from nexus.agents.specialists import RouterAgent
+        from deepseek_agent.agents.specialists import RouterAgent
         p = RouterAgent.system_prompt
-        assert "Nexus" in p and "NEVER switch scripts" in p
+        assert "DeepSeek-Agent" in p and "NEVER switch scripts" in p
         assert "NEVER mention router" in p
 
     def test_synthesize_prompt_has_persona(self):
         import inspect
-        from nexus.agents.specialists import SupervisorAgent
+        from deepseek_agent.agents.specialists import SupervisorAgent
         src = inspect.getsource(SupervisorAgent.synthesize)
-        assert "Nexus" in src and "EXACT SAME language" in src
+        assert "DeepSeek-Agent" in src and "EXACT SAME language" in src
 
 
 # ============ v1.4.1: greeting short-circuit + no clarif-files =========
 class TestGreetingAndClarif:
     def test_greeting_regex(self):
-        from nexus.orchestrator.engine import GREETING_RE
+        from deepseek_agent.orchestrator.engine import GREETING_RE
         for g in ["hy", "hyy", "hi", "hiii", "hello", "hello!",
                   "hey", "yo", "good morning", "hy."]:
             assert GREETING_RE.match(g), g
@@ -1215,33 +1215,33 @@ class TestGreetingAndClarif:
             assert not GREETING_RE.match(g), g
 
     def test_prompt_markup_empty_tag_stripped(self):
-        # live bug: "nexus ❯[/]" appeared — empty closing tags were not stripped
+        # live bug: "deepseek ❯[/]" appeared — empty closing tags were not stripped
         import re
         rx = re.compile(r"\[/?[a-z_ #0-9;]*\]")
-        assert rx.sub("", "\n[user]nexus ❯[/]").strip() == "nexus ❯"
+        assert rx.sub("", "\n[user]deepseek ❯[/]").strip() == "deepseek ❯"
 
     def test_supervisor_no_clarification_files(self):
-        from nexus.agents.specialists import SupervisorAgent
+        from deepseek_agent.agents.specialists import SupervisorAgent
         assert "NEVER create files" in SupervisorAgent.PLAN_SYSTEM
         assert "NO tools, NO" in SupervisorAgent.PLAN_SYSTEM
 
     def test_short_input_gets_no_memory_context(self):
         import inspect
-        from nexus.orchestrator import engine as eng
+        from deepseek_agent.orchestrator import engine as eng
         src = inspect.getsource(eng.Orchestrator.handle)
         assert "GREETING_RE.match(goal) or len(goal.split()) < 3" in src
 
 
 class TestGreetingIdentityFastPath:
     def test_identity_regex(self):
-        from nexus.orchestrator.engine import IDENTITY_Q
+        from deepseek_agent.orchestrator.engine import IDENTITY_Q
         for q in ["what is your name", "tell me about yourself", "who are you",
                   "introduce yourself", "what can you do"]:
             assert IDENTITY_Q.search(q), q
 
     def test_intro_is_clean_no_router(self):
-        from nexus.orchestrator.engine import NEXUS_INTRO, GREETING_REPLIES
-        assert "Nexus" in NEXUS_INTRO and "ROUTER" not in NEXUS_INTRO
+        from deepseek_agent.orchestrator.engine import DEEPSEEK_INTRO, GREETING_REPLIES
+        assert "DeepSeek-Agent" in DEEPSEEK_INTRO and "ROUTER" not in DEEPSEEK_INTRO
         assert all(g.strip() for g in GREETING_REPLIES)
         assert not any(w in g for g in GREETING_REPLIES
                        for w in ("ROUTER", "SUPERVISOR", "AGENT_"))
@@ -1259,9 +1259,9 @@ class TestWorkspaceCleanFixes:
         assert r2.ok is True
 
     def test_delete_only_goal_gets_no_project_scope(self, tmp_path):
-        from nexus.orchestrator.engine import Orchestrator
-        from nexus.orchestrator.dag import Task, TaskDAG
-        from nexus.tools.filesystem import FileSystemTools
+        from deepseek_agent.orchestrator.engine import Orchestrator
+        from deepseek_agent.orchestrator.dag import Task, TaskDAG
+        from deepseek_agent.tools.filesystem import FileSystemTools
         import types
         eng = Orchestrator.__new__(Orchestrator)
         eng.ctx = types.SimpleNamespace(
@@ -1281,10 +1281,10 @@ class TestWorkspaceCleanFixes:
         assert eng.ctx.state["project_dir"] == "projects/calc"
 
     def test_always_approval_covers_action_batch(self, tmp_path):
-        from nexus.core.context import AgentContext
-        from nexus.safety.guard import SafetyGuard
-        from nexus.tools.base import ToolRegistry
-        from nexus.tools.filesystem import FileSystemTools
+        from deepseek_agent.core.context import AgentContext
+        from deepseek_agent.safety.guard import SafetyGuard
+        from deepseek_agent.tools.base import ToolRegistry
+        from deepseek_agent.tools.filesystem import FileSystemTools
         cfg = get_config(); cfg.set("app.workspace", str(tmp_path))
         ctx = AgentContext.__new__(AgentContext)
         ctx.config = cfg; ctx.tools = ToolRegistry()
@@ -1307,24 +1307,24 @@ class TestWorkspaceCleanFixes:
 
     def test_critic_exhaustion_not_done(self):
         """Bug #5: 3 critic-fail + hard-verify fail → task FAILED, never 'done'."""
-        from nexus.agents.specialists import CriticAgent
+        from deepseek_agent.agents.specialists import CriticAgent
         import inspect
         src = inspect.getsource(CriticAgent.hard_verify)
         assert '"verdict": "fail"' in src and '"partial"' not in src.split("except")[1]
-        from nexus.orchestrator import engine as eng_mod
+        from deepseek_agent.orchestrator import engine as eng_mod
         esrc = inspect.getsource(eng_mod.Orchestrator._run_task)
         assert 'hard_v == "pass" or (hard_v == "partial" and task.score >= 60)' in esrc
         assert 'task.score >= 60 and attempt >= self.max_retries' in esrc
 
     def test_worker_has_delete_path(self):
         """Bug #6: worker must have delete_path in allowed_tools."""
-        from nexus.agents.specialists import WorkerAgent
+        from deepseek_agent.agents.specialists import WorkerAgent
         assert "delete_path" in WorkerAgent.allowed_tools
         assert "run_shell" in WorkerAgent.allowed_tools
 
     def test_sessions_numbered_and_resume_by_ref(self, tmp_path):
         """/sessions numbers + /resume by number, id, prefix, bare=latest."""
-        from nexus.memory.store import MemoryStore
+        from deepseek_agent.memory.store import MemoryStore
         ms = MemoryStore(tmp_path / "m.db")
         s1 = ms.start_session(goal="build a calculator")
         for _ in range(3):
@@ -1346,8 +1346,8 @@ class TestWorkspaceCleanFixes:
 
     def test_agent_loop_respects_cancel_flag(self):
         """Ctrl+C sets ctx.state['cancelled'] → agent run() exits immediately."""
-        from nexus.agents.specialists import WorkerAgent
-        from nexus.core.context import AgentContext
+        from deepseek_agent.agents.specialists import WorkerAgent
+        from deepseek_agent.core.context import AgentContext
         ctx = AgentContext.__new__(AgentContext)
         ctx.state = {"cancelled": True}
         ag = WorkerAgent.__new__(WorkerAgent)
@@ -1368,32 +1368,32 @@ class TestWorkspaceCleanFixes:
         assert out.ok is False and "user" in (out.error or "").lower()
 
     def test_spinner_and_prompts_are_english(self):
-        from nexus.cli.ui import UI
+        from deepseek_agent.cli.ui import UI
         import inspect
         src = inspect.getsource(UI)
         assert "Ctrl+C = stop" in src          # live-indicator hint present
 
     def test_prompt_no_duplicate_on_dumb_terminal(self):
-        """Slash menu is ON by default; NEXUS_FANCY_INPUT=0 forces stable rich input."""
-        from nexus.cli.ui import UI
+        """Slash menu is ON by default; DEEPSEEK_FANCY_INPUT=0 forces stable rich input."""
+        from deepseek_agent.cli.ui import UI
         import os
         ui = UI()
-        os.environ["NEXUS_FANCY_INPUT"] = "0"
+        os.environ["DEEPSEEK_FANCY_INPUT"] = "0"
         ui.config_opt_fancy = False
         try:
             assert ui._pt() is None
         finally:
-            os.environ.pop("NEXUS_FANCY_INPUT", None)
-        os.environ["NEXUS_FANCY_INPUT"] = "1"
+            os.environ.pop("DEEPSEEK_FANCY_INPUT", None)
+        os.environ["DEEPSEEK_FANCY_INPUT"] = "1"
         ui.config_opt_fancy = True
         try:
             assert ui._pt() is not None
         finally:
-            os.environ.pop("NEXUS_FANCY_INPUT", None)
+            os.environ.pop("DEEPSEEK_FANCY_INPUT", None)
 
     def test_device_report_rules_in_prompts(self):
         """coder + critic know system partitions ≠ user storage (live 64GB bug)."""
-        from nexus.agents.specialists import CoderAgent, CriticAgent
+        from deepseek_agent.agents.specialists import CoderAgent, CriticAgent
         assert "/dev/block/dm-*" in CoderAgent.system_prompt
         assert "DEVICE-REPORT CHECK" in CriticAgent.system_prompt
 
@@ -1404,7 +1404,7 @@ class TestV181Rules:
     hosting tasks, and servers are blocked even detached."""
 
     def test_quick_block_regex(self):
-        from nexus.orchestrator.engine import _QUICK_BLOCK
+        from deepseek_agent.orchestrator.engine import _QUICK_BLOCK
         assert _QUICK_BLOCK.search("Host portfolio website locally and verify")
         assert _QUICK_BLOCK.search("start_server on port 8000")
         assert _QUICK_BLOCK.search("serve at localhost")
@@ -1414,12 +1414,12 @@ class TestV181Rules:
         assert not _QUICK_BLOCK.search("Create TASKS.md checklist")
 
     def test_hosting_rules_in_prompts(self):
-        from nexus.agents.specialists import CriticAgent
-        from nexus.orchestrator.engine import Orchestrator
+        from deepseek_agent.agents.specialists import CriticAgent
+        from deepseek_agent.orchestrator.engine import Orchestrator
         crit = CriticAgent.system_prompt
         assert "run this command yourself" in crit      # final-answer handoff = FAIL
         assert "grepping the actual html file" in crit  # marker claim must be proven
-        sup_src = open("nexus/agents/specialists.py", encoding="utf-8").read()
+        sup_src = open("deepseek_agent/agents/specialists.py", encoding="utf-8").read()
         assert "HOSTING MARKER DISCIPLINE" in sup_src
         assert "REPLAN REUSE" in sup_src
         assert "HOSTING ESCALATION" in sup_src
@@ -1430,7 +1430,7 @@ class TestV183:
     synthesizer can't fabricate hosting claims."""
 
     def test_start_server_spec_regex(self):
-        from nexus.orchestrator.engine import _START_SERVER_SPEC, _HTML_TITLE
+        from deepseek_agent.orchestrator.engine import _START_SERVER_SPEC, _HTML_TITLE
         desc = ("Host it: call start_server(command='python3 -m http.server 8000 "
                 "--directory projects/varanasi-hub', port=8000, marker='Varanasi Digital Hub', name='hub')")
         m = _START_SERVER_SPEC.search(desc)
@@ -1443,16 +1443,16 @@ class TestV183:
 
     def test_partial_no_autodone_shortcut(self):
         """the old `score >= 70 -> DONE` shortcut is gone; only 'pass' completes."""
-        src = open("nexus/orchestrator/engine.py", encoding="utf-8").read()
+        src = open("deepseek_agent/orchestrator/engine.py", encoding="utf-8").read()
         assert 'verdict.get("verdict") == "pass":' in src
         assert "or task.score >= 70" not in src
 
     def test_synthesize_has_honesty_rule_and_facts(self):
-        src = open("nexus/agents/specialists.py", encoding="utf-8").read()
+        src = open("deepseek_agent/agents/specialists.py", encoding="utf-8").read()
         assert "facts: str = \"\"" in src
         assert "HONESTY RULE" in src
-        assert "HOSTING REALITY" in open("nexus/orchestrator/engine.py", encoding="utf-8").read()
-        assert "_host_parachute" in open("nexus/orchestrator/engine.py", encoding="utf-8").read()
+        assert "HOSTING REALITY" in open("deepseek_agent/orchestrator/engine.py", encoding="utf-8").read()
+        assert "_host_parachute" in open("deepseek_agent/orchestrator/engine.py", encoding="utf-8").read()
 
 
 class TestV184:
@@ -1472,8 +1472,8 @@ class TestV184:
 
     def test_mistral_raises_honestly_when_all_down(self):
         import time as _t
-        import nexus.providers.mistral as mm
-        from nexus.providers.keyring import KeyRing, KeyState
+        import deepseek_agent.providers.mistral as mm
+        from deepseek_agent.providers.keyring import KeyRing, KeyState
         ring = KeyRing("mistral", ["a"])
         ring.keys[0].state = KeyState.DEAD                       # no healthy key
         ring.keys[0].cooldown_until = _t.time() + 9999
@@ -1511,7 +1511,7 @@ class TestV185:
     deterministic split fallback, parachute refuses a spec pointing at a missing dir."""
 
     def _eng(self, tmp_path):
-        from nexus.orchestrator.engine import Orchestrator
+        from deepseek_agent.orchestrator.engine import Orchestrator
         import types
         eng = Orchestrator.__new__(Orchestrator)
         eng.ctx = types.SimpleNamespace(
@@ -1523,7 +1523,7 @@ class TestV185:
     def test_goal_path_forces_exact_slug(self, tmp_path):
         """run #4: goal said projects/varanasi-hub, engine made
         projects/complete-varanasi-digital -> acceptance failed forever."""
-        from nexus.orchestrator.dag import Task, TaskDAG
+        from deepseek_agent.orchestrator.dag import Task, TaskDAG
         eng = self._eng(tmp_path)
         dag = TaskDAG()
         dag.add(Task(id="t1", title="build", description="x", agent="coder",
@@ -1539,14 +1539,14 @@ class TestV185:
         """run #4: spec --directory projects/varanasi-hub (missing) -> 404; the
         parachute must NOT blindly honor a spec whose dir does not exist."""
         import inspect
-        from nexus.orchestrator import engine as engmod
+        from deepseek_agent.orchestrator import engine as engmod
         src = inspect.getsource(engmod.Orchestrator._host_parachute)
         assert "MISSING dir" in src and "m = None" in src
         assert "cands = sorted(scoped.rglob" in src  # heuristic still there
 
     def test_fallback_plan_is_deterministic_split(self):
         """one-worker mega-task is dead: fallback now mirrors the normal DAG."""
-        from nexus.agents.specialists import SupervisorAgent
+        from deepseek_agent.agents.specialists import SupervisorAgent
         sup = SupervisorAgent.__new__(SupervisorAgent)
         fp = sup._fallback_plan(
             "research the top 2026 museums in Varanasi, build a project website in "
@@ -1561,7 +1561,7 @@ class TestV185:
         assert "Single-agent" not in fp["strategy"]
 
     def test_fallback_without_research_or_verify_is_two_tasks(self):
-        from nexus.agents.specialists import SupervisorAgent
+        from deepseek_agent.agents.specialists import SupervisorAgent
         fp = SupervisorAgent.__new__(SupervisorAgent)._fallback_plan(
             "write a fibonacci script in projects/fib/ and verify it runs",
             "llm down")
@@ -1571,14 +1571,14 @@ class TestV185:
 
     def test_plan_retries_once_before_fallback(self):
         import inspect
-        from nexus.agents.specialists import SupervisorAgent
+        from deepseek_agent.agents.specialists import SupervisorAgent
         src = inspect.getsource(SupervisorAgent.plan)
         assert "for attempt in range(2)" in src
         assert src.count("continue") >= 2  # one retry on exception / bad JSON
 
     def test_goal_slug_precedence_over_plan_slug(self, tmp_path):
         """even when the supervisor sets NO project, a goal path still scopes."""
-        from nexus.orchestrator.dag import Task, TaskDAG
+        from deepseek_agent.orchestrator.dag import Task, TaskDAG
         eng = self._eng(tmp_path)
         dag = TaskDAG()
         dag.add(Task(id="t1", title="b", description="x", agent="worker",
@@ -1594,7 +1594,7 @@ class TestV186Watchdog:
     is capped by a wall-clock budget."""
 
     def _prov(self, cfg, keys, msgs):
-        import nexus.providers.mistral as mm
+        import deepseek_agent.providers.mistral as mm
         ring = KeyRing("mistral", keys)
         prov = mm.MistralProvider(cfg, ring, notifier=lambda *a, **k: None)
         return mm, prov
@@ -1603,7 +1603,7 @@ class TestV186Watchdog:
         """1 hung key + tiny budget: raises an honest error in ~1-2s, not 28 min."""
         import time as _t
         import urllib.error
-        import nexus.providers.mistral as mm
+        import deepseek_agent.providers.mistral as mm
         ring = KeyRing("mistral", ["a"])
         prov = mm.MistralProvider(
             {"timeout": 1, "watchdog_budget_slack": 0, "watchdog_grace": 0},
@@ -1628,7 +1628,7 @@ class TestV186Watchdog:
     def test_hung_first_key_fails_over_to_second(self):
         """key A hangs, key B answers → the call succeeds via B."""
         import time as _t
-        import nexus.providers.mistral as mm
+        import deepseek_agent.providers.mistral as mm
         ring = KeyRing("mistral", ["a", "b"])
         prov = mm.MistralProvider(
             {"timeout": 1, "watchdog_budget_slack": 12, "watchdog_grace": 1},
@@ -1662,12 +1662,12 @@ class TestV187:
     """v1.8.7: goal-level parachute, DIY host-guide strip, python3 rewrite."""
 
     def test_goal_needs_host_from_user_goal(self):
-        from nexus.orchestrator.engine import Orchestrator
+        from deepseek_agent.orchestrator.engine import Orchestrator
         assert Orchestrator._goal_needs_host("host it locally and verify HTTP 200")
         assert not Orchestrator._goal_needs_host("summarise this markdown file")
 
     def test_sanitize_strips_diy_http_server(self):
-        from nexus.orchestrator.engine import Orchestrator
+        from deepseek_agent.orchestrator.engine import Orchestrator
         import types
         eng = Orchestrator.__new__(Orchestrator)
         eng._server_evidence = []
@@ -1680,14 +1680,14 @@ class TestV187:
         assert "NOT verified" in out
 
     def test_sanitize_keeps_text_when_verified(self):
-        from nexus.orchestrator.engine import Orchestrator
+        from deepseek_agent.orchestrator.engine import Orchestrator
         eng = Orchestrator.__new__(Orchestrator)
         eng._server_evidence = ["HTTP 200 marker found"]
         raw = "Hosted at http://127.0.0.1:8000 — verified."
         assert eng._sanitize_final(raw, True) == raw
 
     def test_workspace_facts_lists_existing_files(self, tmp_path):
-        from nexus.orchestrator.engine import Orchestrator
+        from deepseek_agent.orchestrator.engine import Orchestrator
         import types
         (tmp_path / "projects" / "hub").mkdir(parents=True)
         (tmp_path / "projects" / "hub" / "test_contact.py").write_text("x")
@@ -1707,10 +1707,10 @@ class TestV187:
         assert r.ok and "42" in r.output
 
     def test_honesty_forbids_diy_and_missing_files(self):
-        src = open("nexus/agents/specialists.py", encoding="utf-8").read()
+        src = open("deepseek_agent/agents/specialists.py", encoding="utf-8").read()
         assert "hosting guide = forbidden" in src
         assert "WORKSPACE FILES" in src
-        es = open("nexus/orchestrator/engine.py", encoding="utf-8").read()
+        es = open("deepseek_agent/orchestrator/engine.py", encoding="utf-8").read()
         assert "goal-level hosting parachute" in es
         assert "_sanitize_final" in es
 
@@ -1731,7 +1731,7 @@ class FakeResp:
 
 class TestV19Autonomous:
     def test_identity_help_not_action(self):
-        from nexus.orchestrator.engine import IDENTITY_Q, ACTION_VERB
+        from deepseek_agent.orchestrator.engine import IDENTITY_Q, ACTION_VERB
         assert IDENTITY_Q.search("help")
         assert IDENTITY_Q.search("what is your name")
         assert IDENTITY_Q.search("how can you help")
@@ -1739,7 +1739,7 @@ class TestV19Autonomous:
         assert ACTION_VERB.search("help me write a file")
 
     def test_session_and_check_regex(self):
-        from nexus.orchestrator.engine import SESSION_Q, CHECK_FOLLOW, DROP_THIS
+        from deepseek_agent.orchestrator.engine import SESSION_Q, CHECK_FOLLOW, DROP_THIS
         assert SESSION_Q.search("kitne sessions hai")
         assert CHECK_FOLLOW.match("check to kr")
         assert DROP_THIS.search("chor delete kr ise")
@@ -1762,8 +1762,8 @@ class TestV19Autonomous:
                 pass
 
     def test_git_status_tool(self, tmp_path):
-        from nexus.tools.gitops import GitTools
-        from nexus.tools.base import ToolRegistry
+        from deepseek_agent.tools.gitops import GitTools
+        from deepseek_agent.tools.base import ToolRegistry
         g = GitTools(tmp_path)
         reg = ToolRegistry()
         g.register(reg)
@@ -1793,7 +1793,7 @@ class TestV191Security:
         assert not r.ok and "sandbox" in r.error.lower()
 
     def test_sql_drop_needs_approval(self):
-        from nexus.safety.guard import SafetyGuard
+        from deepseek_agent.safety.guard import SafetyGuard
         g = SafetyGuard(get_config(), llm=None)
         assert g.classify_action("sqlite_exec", {"sql": "DROP TABLE users"}) == "delete_files"
         assert g.classify_action("sqlite_exec", {"sql": "DELETE FROM users"}) == "delete_files"
@@ -1802,8 +1802,8 @@ class TestV191Security:
         assert ok is True and act == "delete_files"
 
     def test_ssrf_loopback_and_metadata(self):
-        from nexus.tools.ssrf import url_blocked
-        from nexus.tools.web import WebTools
+        from deepseek_agent.tools.ssrf import url_blocked
+        from deepseek_agent.tools.web import WebTools
         assert url_blocked("http://127.0.0.1/")
         assert url_blocked("http://localhost:8000/")
         assert url_blocked("http://169.254.169.254/latest/meta-data")
@@ -1814,21 +1814,21 @@ class TestV191Security:
         assert not r2.ok and "SSRF" in (r2.error or "")
 
     def test_partial_not_ok(self):
-        from nexus.orchestrator.engine import Orchestrator
+        from deepseek_agent.orchestrator.engine import Orchestrator
         import inspect
         src = inspect.getsource(Orchestrator.handle)
         assert '(t.verdict or "pass") == "pass"' in src
 
     def test_timeout_not_done(self):
-        from nexus.orchestrator.engine import Orchestrator
+        from deepseek_agent.orchestrator.engine import Orchestrator
         import inspect
         src = inspect.getsource(Orchestrator._run_task)
         assert 'time budget spent — not marking done' in src
         assert "task.status = TaskStatus.FAILED" in src
 
     def test_fix_existing_no_invented_project(self, tmp_path):
-        from nexus.orchestrator.engine import Orchestrator
-        from nexus.orchestrator.dag import Task, TaskDAG
+        from deepseek_agent.orchestrator.engine import Orchestrator
+        from deepseek_agent.orchestrator.dag import Task, TaskDAG
         import types
         eng = Orchestrator.__new__(Orchestrator)
         eng.ctx = types.SimpleNamespace(
@@ -1849,8 +1849,8 @@ class TestV191Security:
 class TestOpenAIWatchdog:
     def test_hung_openai_compat_bounded(self):
         import time as _t
-        import nexus.providers.openai_compat as oc
-        from nexus.providers.keyring import KeyRing
+        import deepseek_agent.providers.openai_compat as oc
+        from deepseek_agent.providers.keyring import KeyRing
         ring = KeyRing("openai", ["a"])
         prov = oc.OpenAICompatibleProvider(
             {"timeout": 1, "watchdog_budget_slack": 0, "watchdog_grace": 0,
@@ -1875,7 +1875,7 @@ class TestOpenAIWatchdog:
 class TestGitMutationsAndCheckpoint:
     def test_git_add_commit_local(self, tmp_path):
         import subprocess
-        from nexus.tools.gitops import GitTools
+        from deepseek_agent.tools.gitops import GitTools
         subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
         subprocess.run(["git", "config", "user.email", "t@t"], cwd=tmp_path, capture_output=True)
         subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, capture_output=True)
@@ -1887,14 +1887,14 @@ class TestGitMutationsAndCheckpoint:
         assert g.git_log(1).ok
 
     def test_git_add_escape_blocked(self, tmp_path):
-        from nexus.tools.gitops import GitTools
+        from deepseek_agent.tools.gitops import GitTools
         g = GitTools(tmp_path)
         r = g.git_add("/etc/passwd")
         assert not r.ok and "BLOCKED" in (r.error or "")
 
     def test_checkpoint_writes_json(self, tmp_path):
-        from nexus.orchestrator.engine import Orchestrator
-        from nexus.orchestrator.dag import Task, TaskDAG
+        from deepseek_agent.orchestrator.engine import Orchestrator
+        from deepseek_agent.orchestrator.dag import Task, TaskDAG
         import types, json
         eng = Orchestrator.__new__(Orchestrator)
         eng.config = types.SimpleNamespace(data_dir=tmp_path)

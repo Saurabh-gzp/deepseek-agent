@@ -17,10 +17,10 @@ DeepSeek's web API has NO native function-calling, so we implement **text-based
 tool calling**: the model is instructed to emit
 ``TOOL_CALL: {"name": "...", "arguments": {...}}`` inside its reply, and the
 provider parses that into OpenAI-style ``tool_calls`` so the BaseAgent ReAct
-loop (and the whole Nexus engine) works unchanged.
+loop (and the whole DeepSeek-Agent engine) works unchanged.
 
 NOTE: DeepSeek has no public embeddings / moderation / OCR endpoints, so
-``supports_embeddings`` etc. are False — the Nexus RAG automatically degrades
+``supports_embeddings`` etc. are False — the DeepSeek-Agent RAG automatically degrades
 to keyword search and safety skips LLM moderation.
 """
 from __future__ import annotations
@@ -621,7 +621,7 @@ class DeepSeekProvider(BaseProvider):
         self.search = bool(cfg.get("search", False))
         self.timeout = int(cfg.get("timeout", 180))
         self.account = DeepSeekAccount(Path(cfg.get("keys_dir", "./keys")), self.notify)
-        self.pow = PoWSolver(Path(cfg.get("data_dir", "./.nexus")), self.notify)
+        self.pow = PoWSolver(Path(cfg.get("data_dir", "./.deepseek")), self.notify)
         self._session: Optional[str] = None
         self._token: Optional[str] = None
         self._attach: Optional[Callable[[], str]] = None

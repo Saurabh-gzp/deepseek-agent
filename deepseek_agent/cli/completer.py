@@ -8,7 +8,7 @@ Features:
   * "/skill web_development/<tab>"       → completes skill ids
   * "/agent coder <tab>"                 → agent names
   * "/mode smart <tab>"                  → modes
-  * arrow-up/down history (persist in .nexus/history)
+  * arrow-up/down history (persist in .deepseek/history)
 """
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ COMMANDS: Dict[str, str] = {
 }
 
 
-class NexusCompleter(Completer if _HAS_PT else object):
+class DeepSeekCompleter(Completer if _HAS_PT else object):
     def __init__(self, arg_hints: Optional[Dict[str, List[str]]] = None):
         self.arg_hints: Dict[str, List[str]] = arg_hints or {}
 

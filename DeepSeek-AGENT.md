@@ -10,7 +10,7 @@ but swaps the LLM backend from Mistral API keys to a **DeepSeek account login**.
 
 ## What changed
 
-| Area | Before (Nexus) | Now (DeepSeek-Agent) |
+| Area | Before | Now (DeepSeek-Agent) |
 |---|---|---|
 | Backend | Mistral API keys | **DeepSeek account (email + password)** |
 | Login | paste API key | first-run wizard: email + password → token |
@@ -49,7 +49,7 @@ so runs keep going without you.
 
 ```bash
 bash setup.sh        # installs deps + nodejs (DeepSeek PoW solver)
-nexus                # -> asks for your DeepSeek email + password
+deepseek             # -> asks for your DeepSeek email + password
 ```
 
 ### Change account anytime
@@ -85,8 +85,8 @@ has every tool: filesystem, shell, python, web, skills, RAG, memory, office,
 dbms, git. Any non-`/` input is treated as a goal:
 
 ```bash
-nexus "build a todo API in the workspace and test it"
-nexus -m never "fix the bug in src/app.py"     # full autonomy, no confirmations
+deepseek "build a todo API in the workspace and test it"
+deepseek -m never "fix the bug in src/app.py"     # full autonomy, no confirmations
 ```
 
 Because DeepSeek has no function-calling API, tool use is **text-based**: the

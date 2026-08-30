@@ -158,7 +158,7 @@ class UI:
 
         prompt_toolkit's repaint math relies on CPR. On terminals that DON'T
         answer (dumb pipes, some emulators), a SIGWINCH resize makes PT reprint
-        the prompt with real newlines — the 'nexus ❯' multiplication bug on
+        the prompt with real newlines — the 'deepseek ❯' multiplication bug on
         Termux screen resize. Where CPR is missing we fall back to the simple
         rich input (stable, no autocomplete).
         """
@@ -192,9 +192,9 @@ class UI:
         """prompt_toolkit session — '/ ' command menu, arrow-key history.
 
         ON by default so typing `/` shows the command menu.
-        Opt OUT: NEXUS_FANCY_INPUT=0 or ui.fancy_input: false."""
+        Opt OUT: DEEPSEEK_FANCY_INPUT=0 or ui.fancy_input: false."""
         import os as _os
-        env = _os.getenv("NEXUS_FANCY_INPUT")
+        env = _os.getenv("DEEPSEEK_FANCY_INPUT")
         if env == "0":
             return None
         if env != "1" and self.config_opt_fancy is False:
@@ -379,7 +379,7 @@ class UI:
                 from prompt_toolkit.formatted_text import HTML as PTHTML
                 # NOTE: keep this render MINIMAL — no bottom_toolbar, single-line
                 # message. Extra render layers multiply on terminal resize (SIGWINCH)
-                # and were causing duplicated "nexus ❯" lines on Termux.
+                # and were causing duplicated "deepseek ❯" lines on Termux.
                 text = pt.prompt(PTHTML(
                     f"<ansicyan><b>{plain or '❯'}</b></ansicyan> "),
                     is_password=secret)

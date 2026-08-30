@@ -1,7 +1,7 @@
 """Provider abstraction layer.
 
 To add a new provider, just extend `BaseProvider` and
-register it in `nexus/providers/registry.py`. The rest of the system stays unchanged.
+register it in `deepseek_agent/providers/registry.py`. The rest of the system stays unchanged.
 """
 from __future__ import annotations
 

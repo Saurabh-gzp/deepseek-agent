@@ -1,4 +1,4 @@
-"""Nexus CLI — interactive REPL + one-shot mode."""
+"""DeepSeek-Agent CLI — interactive REPL + one-shot mode."""
 from __future__ import annotations
 
 import argparse
@@ -49,7 +49,7 @@ HELP = """
 """
 
 
-class NexusApp:
+class DeepSeekApp:
     def __init__(self, config_path: Optional[str] = None, theme: Optional[str] = None,
                  verbose: bool = True, approval: Optional[str] = None,
                  workspace: Optional[str] = None):
@@ -140,7 +140,7 @@ class NexusApp:
     def _wire_completer(self) -> None:
         """Slash-autocomplete: / shows all commands, /skill completes ids, /agent completes names."""
         try:
-            from .completer import NexusCompleter, _HAS_PT
+            from .completer import DeepSeekCompleter, _HAS_PT
             if not _HAS_PT:
                 return
             hints = {
@@ -152,7 +152,7 @@ class NexusApp:
                 "/search": ["on", "off"],
                 "/cd": ["../", "./workspace"],
             }
-            self.ui.completer = NexusCompleter(hints)
+            self.ui.completer = DeepSeekCompleter(hints)
             self.ui.history_path = self.config.data_dir / "history"
         except Exception:
             pass
@@ -321,7 +321,7 @@ class NexusApp:
             try:
                 # NOTE: no leading \n here — blank-enter and terminal-resize
                 # repaints must not stack empty lines above the prompt.
-                line = self.ui.ask("[user]nexus ❯[/]").strip()
+                line = self.ui.ask("[user]deepseek ❯[/]").strip()
             except (KeyboardInterrupt, EOFError):
                 self.ui.print("\n[muted]bye 👋[/]")
                 break
@@ -336,7 +336,7 @@ class NexusApp:
                               "or a new task (context is kept)[/]")
             except Exception as e:  # noqa: BLE001
                 self.ui.error(f"{type(e).__name__}: {e}")
-                if os.getenv("NEXUS_DEBUG"):
+                if os.getenv("DEEPSEEK_DEBUG"):
                     import traceback
                     self.ui.print(traceback.format_exc())
             finally:
@@ -410,7 +410,7 @@ class NexusApp:
         self.ui.event("ok", f"verbose = {self.ui.verbose}")
 
     def cmd_ledger(self, arg: str = "") -> None:
-        """ Evidence ledger — what Nexus ACTUALLY observed this conversation."""
+        """ Evidence ledger — what DeepSeek-Agent ACTUALLY observed this conversation."""
         led = self.ctx.state.get("ledger")
         if led is None or not led.recent(99):
             self.ui.event("info", "ledger empty — nothing observed yet this session")
@@ -893,7 +893,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"deepseek-agent {_gc().get('app.version', '2.0.0')}")
         return 0
 
-    app = NexusApp(args.config, args.theme, not args.quiet, args.mode, args.workspace)
+    app = DeepSeekApp(args.config, args.theme, not args.quiet, args.mode, args.workspace)
     if args.goal:
         app.start()
         goal = " ".join(args.goal)

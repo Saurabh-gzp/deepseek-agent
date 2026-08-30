@@ -315,7 +315,7 @@ def _server_state(ctx: Dict[str, Any]) -> Tuple[bool, str, List[str]]:
     import json
     from pathlib import Path
     ws = Path(ctx["workspace"])
-    files = [ws / ".nexus" / "servers.json", ws.parent / ".nexus" / "servers.json"]
+    files = [ws / ".deepseek" / "servers.json", ws.parent / ".deepseek" / "servers.json"]
     data: Dict[str, Any] = {}
     src_of: Dict[str, Any] = {}
     for f in (ctx.get("server_registry"),) + tuple(files):
@@ -550,7 +550,7 @@ def resolve(goal: str, ctx: Dict[str, Any], project_hint: str = "") -> Optional[
         if intent == "server_state":
             ok, ans, items = _server_state(ctx)
             return {"intent": intent, "answer": ans,
-                    "evidence": [("server_registry", {"path": "workspace/.nexus/servers.json"},
+                    "evidence": [("server_registry", {"path": "workspace/.deepseek/servers.json"},
                                   True, ans)], "needs_llm": False}
         if intent == "git_state":
             op = "git_status"

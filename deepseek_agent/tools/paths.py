@@ -17,7 +17,7 @@ def in_workspace(path: Path, root: Path) -> bool:
 # v1.10.4 §10 TOOL ARGUMENT INTELLIGENCE
 # ---------------------------------------------------------------------
 # Live bug: the agent called list_dir("workspace") while the ACTIVE workspace
-# already IS .../nexus-agent/workspace, got "Not found: workspace", burned a
+# already IS .../deepseek-agent/workspace, got "Not found: workspace", burned a
 # critic round, and recovered on the second try. A wrong path argument is a
 # *normalisation* problem, not a decision problem — fix it in the harness.
 _PATH_KEYS = ("path", "directory", "cwd", "src", "dst", "from_path", "to_path")

@@ -1,5 +1,5 @@
 # ==========================================================
-#  NEXUS AGENT - Main Configuration
+#  DEEPSEEK-AGENT - Main Configuration
 #  Autonomous multi-agent CLI system (Termux friendly)
 # ==========================================================
 
@@ -7,7 +7,7 @@ app:
   name: "DeepSeek-Agent"
   version: "2.0.0"
   workspace: "./workspace"          # agent ka sandbox / project directory
-  data_dir: "./.nexus"              # db, vectors, logs, sessions
+  data_dir: "./.deepseek"              # db, vectors, logs, sessions
   theme: "cocoa"                    # cyber | mono | matrix
   language: "auto"                  # auto | en | hi  (agent reply language)
 
@@ -23,7 +23,7 @@ providers:
 
   deepseek:
     enabled: true
-    type: deepseek                   # nexus/providers/deepseek.py
+    type: deepseek                   # deepseek_agent/providers/deepseek.py
     # DeepSeek-Agent logs in with email+password -> bearer token
     # (saved to keys/deepseek_account.json + keys/deepseek_token, chmod 600).
     # Native app mode: instant | expert | vision  (switch at runtime with /mode)
@@ -31,12 +31,12 @@ providers:
     thinking: true
     search: false
     keys_dir: "./keys"
-    data_dir: "./.nexus"
+    data_dir: "./.deepseek"
     timeout: 180
 
   mistral:
     enabled: true
-    type: mistral                    # nexus/providers/mistral.py (optional fallback)
+    type: mistral                    # deepseek_agent/providers/mistral.py (optional fallback)
     base_url: "https://api.mistral.ai/v1"
     # keys come from the environment: MISTRAL_API_KEY, MISTRAL_API_KEY_2 ... or keys.json
     env_keys: ["MISTRAL_API_KEY", "MISTRAL_API_KEY_2", "MISTRAL_API_KEY_3"]
@@ -229,7 +229,7 @@ rag:
   chunk_overlap: 150
   top_k: 6
   min_score: 0.28
-  index_dir: "./.nexus/vectors"
+  index_dir: "./.deepseek/vectors"
   auto_index_workspace: true
   file_extensions: [".md", ".txt", ".py", ".js", ".ts", ".json", ".yaml", ".yml",
                     ".html", ".css", ".sh", ".java", ".c", ".cpp", ".go", ".rs", ".rb", ".php"]
@@ -240,7 +240,7 @@ rag:
 # ----------------------------------------------------------
 memory:
   enabled: true
-  db_path: "./.nexus/memory.db"
+  db_path: "./.deepseek/memory.db"
   recent_window: 12
   semantic_top_k: 5
   save_task_summaries: true
@@ -281,4 +281,4 @@ failover:
   retry_backoff_base: 1.5
 
 ui:
-  fancy_input: true              # `/` slash menu + history (NEXUS_FANCY_INPUT=0 to disable)
+  fancy_input: true              # `/` slash menu + history (DEEPSEEK_FANCY_INPUT=0 to disable)

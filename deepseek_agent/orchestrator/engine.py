@@ -86,8 +86,8 @@ CHECK_FOLLOW = _re.compile(
 DROP_THIS = _re.compile(
     r"(chor|chhod|chodo|chhod do|ise delete|is ko delete|"
     r"delete (this|it|ise)|leave this|drop this)", _re.I)
-NEXUS_INTRO = (
-    "I'm **Nexus** — your personal autonomous agent, running right on this device.\n"
+DEEPSEEK_INTRO = (
+    "I'm **DeepSeek-Agent** — your personal autonomous agent, running right on this device.\n"
     "- Write, fix, run and verify code\n"
     "- Web research + live info (weather, news, prices)\n"
     "- Build and manage projects\n"
@@ -667,7 +667,7 @@ class Orchestrator:
                                    final=reply, ok=True, verified=True,
                                    elapsed=time.time() - t0)
                 if self.ctx.memory:
-                    self.ctx.memory.add_message("assistant", reply, "nexus")
+                    self.ctx.memory.add_message("assistant", reply, "deepseek")
                 return report
             if DROP_THIS.search(goal) and len(goal.split()) <= 12:
                 reply = self._drop_last_project()
@@ -676,7 +676,7 @@ class Orchestrator:
                                    final=reply, ok=True, verified=True,
                                    elapsed=time.time() - t0)
                 if self.ctx.memory:
-                    self.ctx.memory.add_message("assistant", reply, "nexus")
+                    self.ctx.memory.add_message("assistant", reply, "deepseek")
                 return report
 
         # ---- fast path: pure arithmetic solved exactly, without the LLM
@@ -727,7 +727,7 @@ class Orchestrator:
         # ("isse tu kya sikha?", "isme kya important hai?"). Resolve the
         # anaphora against the evidence ledger BEFORE the router can mistake it
         # for a fresh identity/chat question (live bug: it answered
-        # "Main Nexus, tera personal agent hoon!…" to a follow-up).
+        # "Main DeepSeek-Agent, tera personal agent hoon!…" to a follow-up).
         if (not force_orchestration and (has_reference(goal) or is_session_recap(goal))
                 and not env_classify(goal)
                 and (wants_observation(goal) or is_session_recap(goal))):
@@ -773,7 +773,7 @@ class Orchestrator:
         decision = self.router.route(route_goal, rctx)
         # v1.10.4 §1/§2/§6/§14: an environment-grounded question may NEVER be
         # answered from world knowledge. Live bug: "bro workspace me kya hai"
-        # was intent=question + orchestrate=False and Nexus recited the
+        # was intent=question + orchestrate=False and DeepSeek-Agent recited the
         # Termux app description instead of listing the filesystem.
         decision = env_guard(self.ctx, route_goal, decision, self.ui)
         # v1.9.8: guard against the PRECOMPUTED goal too — the original goal still
@@ -989,7 +989,7 @@ class Orchestrator:
             if not matches and served_dir:
                 # last resort: the running registry really points at this folder
                 try:
-                    reg = self.config.workspace / ".nexus" / "servers.json"
+                    reg = self.config.workspace / ".deepseek" / "servers.json"
                     if reg.exists():
                         import json as _json
                         for meta in (_json.loads(reg.read_text() or "{}")).values():
@@ -1083,7 +1083,7 @@ class Orchestrator:
             if not ws.exists():
                 return ""
             keep = {".html", ".css", ".js", ".py", ".md", ".json", ".txt"}
-            skip = {".nexus", "__pycache__", ".git", "node_modules"}
+            skip = {".deepseek", "__pycache__", ".git", "node_modules"}
             files: List[str] = []
             for p in sorted(ws.rglob("*")):
                 if not p.is_file():
@@ -1190,11 +1190,11 @@ class Orchestrator:
             except Exception:
                 pass  # nothing live on the port -> real start_server attempt below
             r = self.ctx.shell.start_server(command=cmd, port=port, marker=marker,
-                                            name="nexus-parachute")
+                                            name="deepseek-parachute")
             if not r.ok and "marker" in (r.error or "") and not m:
                 # title guessed wrong? retry with a marker-free verification
                 r = self.ctx.shell.start_server(command=cmd, port=port, marker="",
-                                                name="nexus-parachute")
+                                                name="deepseek-parachute")
             if not r.ok:
                 self.ui.event("warn", f"{task.id}: harness hosting failed: {(r.error or '')[:120]}")
                 return False
@@ -1791,9 +1791,9 @@ class Orchestrator:
             pass
 
     def _live_chat(self, goal: str) -> str:
-        """Real Nexus reply — no canned templates."""
+        """Real DeepSeek-Agent reply — no canned templates."""
         sys = (
-            "You are Nexus, a personal autonomous agent on the user's device. "
+            "You are DeepSeek-Agent, a personal autonomous agent on the user's device. "
             "This is casual chat or slang. Reply as a smart friend. "
             "Match the user's language and script (Roman Hindi stays Roman). "
             "1-3 short lines. Never mention router/supervisor/tools/pipeline. "

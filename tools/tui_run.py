@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Bounded run driver: launch the nexus TUI in a real pty, send ONE task,
-capture the full ANSI-stripped transcript. For 24/7 use: set NEXUS_OUT per
-run; task text via NEXUS_TASK. Aborts on true silence (stall > 600s) or when
+"""Bounded run driver: launch the DeepSeek-Agent TUI in a real pty, send ONE task,
+capture the full ANSI-stripped transcript. For 24/7 use: set DEEPSEEK_OUT per
+run; task text via DEEPSEEK_TASK. Aborts on true silence (stall > 600s) or when
 the app returns to the prompt — never hangs forever."""
 import fcntl
 import os
@@ -15,10 +15,10 @@ import termios
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUT = os.environ.get("NEXUS_OUT", "/home/user/tui_run_log.txt")
-TASK = os.environ.get("NEXUS_TASK", "make a best portfolio website for yourself search on internet claude ai skills about frontend design and use it and host kr dena locally best ui ke sath bnana")
+OUT = os.environ.get("DEEPSEEK_OUT", "/home/user/tui_run_log.txt")
+TASK = os.environ.get("DEEPSEEK_TASK", "make a best portfolio website for yourself search on internet claude ai skills about frontend design and use it and host kr dena locally best ui ke sath bnana")
 COLS, ROWS = 120, 50
-PROMPT_MARK = "nexus"
+PROMPT_MARK = "deepseek"
 
 os.makedirs("/home/user/tui_artifacts", exist_ok=True)
 
@@ -27,9 +27,9 @@ def main():
     master, slave = pty.openpty()
     fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
     env = dict(os.environ)
-    env.pop("NEXUS_FANCY_INPUT", None)
+    env.pop("DEEPSEEK_FANCY_INPUT", None)
     env.setdefault("TERM", "xterm-256color")
-    proc = subprocess.Popen([sys.executable, "nexus.py", "-t", "cyber", "-m", "smart"],
+    proc = subprocess.Popen([sys.executable, "deepseek.py", "-t", "cyber", "-m", "smart"],
                             cwd=ROOT, stdin=slave, stdout=slave, stderr=slave, env=env)
     os.close(slave)
     raw = bytearray()

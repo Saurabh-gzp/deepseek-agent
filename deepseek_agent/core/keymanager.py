@@ -8,7 +8,7 @@ Design (user ke idea ka robust version):
 * Per-provider file, plain JSON, chmod 600 (folder 700)
 * At startup the registry merges these files with env keys (dedup)
 * live add/delete via the /key menu — synced into KeyRing without a restart
-* Purana .nexus/keys.json automatic migrate ho jaata hai
+* Purana .deepseek/keys.json automatic migrate ho jaata hai
 """
 from __future__ import annotations
 
@@ -102,7 +102,7 @@ class KeyManager:
 
     # ------------------------------------------------------------------
     def migrate_legacy(self, legacy_file: Path) -> int:
-        """.nexus/keys.json (purana format) -> keys/ folder. Returns moved count."""
+        """.deepseek/keys.json (purana format) -> keys/ folder. Returns moved count."""
         if not legacy_file.exists() or self.dir.exists() and self.all():
             return 0
         try:

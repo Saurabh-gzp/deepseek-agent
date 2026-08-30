@@ -1,7 +1,7 @@
 """Provider registry — plug-and-play provider system.
 
 To add a new provider:
-    1. create a BaseProvider subclass in nexus/providers/myprovider.py
+    1. create a BaseProvider subclass in deepseek_agent/providers/myprovider.py
     2. register it in the PROVIDER_TYPES dict
     3. config.yaml -> providers.myprovider: {enabled: true, type: myprovider, ...}
 """
@@ -74,7 +74,7 @@ class ProviderRegistry:
             merged["max_key_rotations_per_call"] = self.config.get(
                 "failover.max_key_rotations_per_call", 6)
             # resolve provider-relative dirs against the package root so a
-            # different CWD cannot orphan keys/ and .nexus/ (DeepSeek login).
+            # different CWD cannot orphan keys/ and .deepseek/ (DeepSeek login).
             for _rk in ("keys_dir", "data_dir"):
                 _rv = merged.get(_rk)
                 if _rv and not Path(str(_rv)).is_absolute():
@@ -139,7 +139,7 @@ class ProviderRegistry:
         if name not in self.providers:
             raise RuntimeError(
                 f"Provider '{name}' unavailable. Configured: {list(self.providers)}. "
-                "Run `nexus keys add` or set MISTRAL_API_KEY."
+                "Run `deepseek keys add` or set MISTRAL_API_KEY."
             )
         return self.providers[name]
 

@@ -1,4 +1,4 @@
-# Running Nexus Agent on Termux (3 minutes)
+# Running DeepSeek-Agent on Termux (3 minutes)
 
 Turn an Android phone into a personal AI-agent workstation.
 
@@ -15,7 +15,7 @@ pkg install -y python git
 ## Step 2 — Get the agent & run setup
 
 ```bash
-git clone https://github.com/Saurabh-gzp/nexus-agent.git && cd nexus-agent
+git clone https://github.com/Saurabh-gzp/deepseek-agent.git && cd deepseek-agent
 bash setup.sh
 ```
 
@@ -28,7 +28,7 @@ is still enough to run.
 Launch the agent:
 
 ```bash
-nexus
+deepseek
 ```
 
 The first run opens the key wizard by itself — paste your **Mistral AI**
@@ -36,19 +36,19 @@ key (free: [console.mistral.ai](https://console.mistral.ai)). Keys are
 stored only on your device (`keys/`, chmod 600, gitignored). Add more
 anytime with `/keys add sk-...`.
 
-`setup.sh` also installs a global `nexus` command (removing any older
-`nexus` command or alias first), so you can launch from anywhere with:
+`setup.sh` also installs a global `deepseek` command (removing any older
+`deepseek` command or alias first), so you can launch from anywhere with:
 
 ```bash
-nexus
+deepseek
 ```
 
 That's it. Now just talk to it:
 
 ```
-nexus ❯ hello, who are you?
-nexus ❯ make a python script that prints squares from 1 to 10, run it and show me the output
-nexus ❯ clean the workspace, delete everything
+deepseek ❯ hello, who are you?
+deepseek ❯ make a python script that prints squares from 1 to 10, run it and show me the output
+deepseek ❯ clean the workspace, delete everything
 ```
 
 ## Termux extras

@@ -1,4 +1,4 @@
-# Nexus Architecture
+# DeepSeek-Agent Architecture
 
 Design notes for anyone extending the system.
 
@@ -8,13 +8,13 @@ Design notes for anyone extending the system.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ CLI          nexus/cli/app.py · ui.py                        │  REPL, commands, rich UI
+│ CLI          deepseek_agent/cli/app.py · ui.py                        │  REPL, commands, rich UI
 ├──────────────────────────────────────────────────────────────┤
-│ ORCHESTRATOR nexus/orchestrator/engine.py · dag.py           │  plan→run→verify→replan
+│ ORCHESTRATOR deepseek_agent/orchestrator/engine.py · dag.py           │  plan→run→verify→replan
 ├──────────────────────────────────────────────────────────────┤
-│ AGENTS       nexus/agents/base.py · specialists.py           │  ReAct loop, 6 roles
+│ AGENTS       deepseek_agent/agents/base.py · specialists.py           │  ReAct loop, 6 roles
 ├──────────────────────────────────────────────────────────────┤
-│ CONTEXT      nexus/core/context.py                           │  DI container
+│ CONTEXT      deepseek_agent/core/context.py                           │  DI container
 │  ├─ TOOLS    tools/{filesystem,shell,web,base}.py            │  registry + risk classes
 │  ├─ SKILLS   skills/loader.py                                │  progressive disclosure
 │  ├─ RAG      rag/{engine,store}.py                           │  sqlite + numpy hybrid

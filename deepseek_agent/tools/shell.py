@@ -689,7 +689,7 @@ class ShellTools:
                                 "serving": served_rel})
 
     # ------------------------------------------------------------------
-    _SERVER_REG = ".nexus/servers.json"
+    _SERVER_REG = ".deepseek/servers.json"
 
     def _remember_server(self, port: int, pid: int) -> None:
         """Track harness-started servers so stop_server can find them later."""
@@ -715,7 +715,7 @@ class ShellTools:
         """All places a servers.json may live.
 
         v1.10.4: the registry is written under the CURRENT working root, so a
-        server started in one nexus session was invisible to the next session
+        server started in one DeepSeek-Agent session was invisible to the next session
         that opened a project subfolder as its workspace — the port was
         genuinely busy and stop_server had a dead end (live: "cannot be stopped
         using stop_server… you will need to manually stop"). Read every known

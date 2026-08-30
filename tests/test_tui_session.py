@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real interactive TUI test — spawns nexus.py in a pseudo-terminal (pty),
+"""Real interactive TUI test — spawns deepseek.py in a pseudo-terminal (pty),
 sends messages like a human user, captures ANSI + rendered screen snapshots.
 
 Usage: python3 tests/test_tui_session.py [fast]
@@ -23,8 +23,8 @@ except ImportError:          # optional dev dependency (real-terminal testing)
     pyte = None
 
 ROOT = str(Path(__file__).resolve().parent.parent)   # repo root (was hardcoded)
-ART = os.path.join(ROOT, ".nexus", "tui_artifacts")
-PROMPT = "nexus ❯"          # rendered prompt marker
+ART = os.path.join(ROOT, ".deepseek", "tui_artifacts")
+PROMPT = "deepseek ❯"          # rendered prompt marker
 ALLOW = "Allow?"             # approval prompt marker
 
 COLS, ROWS = 96, 44
@@ -133,11 +133,11 @@ def run(fast=False):
         log.append((name, bool(ok), extra))
         print(f"  {'✓' if ok else '✗'} {name} {extra}")
 
-    s = Session(["python3", "nexus.py"])
+    s = Session(["python3", "deepseek.py"])
     print("» launching TUI in pty (96x44) …")
 
     # ---- 1. banner appears
-    got = s.wait_for(r"NEXUS|Autonomous Agent", 60)
+    got = s.wait_for(r"DEEPSEEK-AGENT|Autonomous Agent", 60)
     check("banner rendered", got)
     got = s.wait_for(re.escape(PROMPT), 40)
     check("first prompt shown", got)

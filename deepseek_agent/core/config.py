@@ -1,4 +1,4 @@
-"""Configuration loader for Nexus Agent.
+"""Configuration loader for DeepSeek-Agent.
 
 Priority:  CLI args  >  env vars  >  config/config.yaml  >  defaults
 """
@@ -16,7 +16,7 @@ except ImportError:  # pragma: no cover
     yaml = None
 
 
-PKG_ROOT = Path(__file__).resolve().parent.parent.parent  # nexus-agent/
+PKG_ROOT = Path(__file__).resolve().parent.parent.parent  # deepseek-agent/
 DEFAULT_CONFIG = PKG_ROOT / "config" / "config.yaml"
 
 
@@ -56,14 +56,14 @@ class Config:
         return cfg
 
     def _apply_env_overrides(self) -> None:
-        # NEXUS_APPROVAL_MODE, NEXUS_WORKSPACE, NEXUS_THEME ...
-        if v := os.getenv("NEXUS_WORKSPACE"):
+        # DEEPSEEK_APPROVAL_MODE, DEEPSEEK_WORKSPACE, DEEPSEEK_THEME ...
+        if v := os.getenv("DEEPSEEK_WORKSPACE"):
             self.set("app.workspace", v)
-        if v := os.getenv("NEXUS_APPROVAL_MODE"):
+        if v := os.getenv("DEEPSEEK_APPROVAL_MODE"):
             self.set("safety.approval_mode", v)
-        if v := os.getenv("NEXUS_THEME"):
+        if v := os.getenv("DEEPSEEK_THEME"):
             self.set("app.theme", v)
-        if v := os.getenv("NEXUS_PROVIDER"):
+        if v := os.getenv("DEEPSEEK_PROVIDER"):
             self.set("providers.default", v)
 
     # ---------- access ----------
@@ -105,7 +105,7 @@ class Config:
 
     @property
     def data_dir(self) -> Path:
-        return self._abs("app.data_dir", "./.nexus")
+        return self._abs("app.data_dir", "./.deepseek")
 
     @property
     def skills_dir(self) -> Path:
@@ -113,7 +113,7 @@ class Config:
 
     @property
     def vector_dir(self) -> Path:
-        raw = str(self.get("rag.index_dir", "./.nexus/vectors"))
+        raw = str(self.get("rag.index_dir", "./.deepseek/vectors"))
         p = Path(raw).expanduser()
         if not p.is_absolute():
             p = (self.root / p).resolve()
@@ -122,7 +122,7 @@ class Config:
 
     @property
     def memory_db(self) -> Path:
-        raw = str(self.get("memory.db_path", "./.nexus/memory.db"))
+        raw = str(self.get("memory.db_path", "./.deepseek/memory.db"))
         p = Path(raw).expanduser()
         if not p.is_absolute():
             p = (self.root / p).resolve()

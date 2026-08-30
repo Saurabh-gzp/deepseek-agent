@@ -1,18 +1,18 @@
 <div align="center">
 
 ```
- ███╗   ██╗███████╗██╗  ██╗██╗   ██╗███████╗
- ████╗  ██║██╔════╝╚██╗██╔╝██║   ██║██╔════╝
- ██╔██╗ ██║█████╗   ╚███╔╝ ██║   ██║███████╗
- ██║╚██╗██║██╔══╝   ██╔██╗ ██║   ██║╚════██║
- ██║ ╚████║███████╗██╔╝ ██╗╚██████╔╝███████║
- ╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝
+ ██████╗ ███████╗███████╗██████╗ ███████╗███████╗███████╗██╗  ██╗
+ ██╔══██╗██╔════╝██╔════╝██╔══██╗██╔════╝██╔════╝██╔════╝██║ ██╔╝
+ ██║  ██║█████╗  █████╗  ██████╔╝█████╗  █████╗  █████╗  █████╔╝
+ ██║  ██║██╔══╝  ██╔══╝  ██╔═══╝ ██╔══╝  ██╔══╝  ██╔══╝  ██╔═██╗
+ ██████╔╝███████╗███████╗██║     ███████╗███████╗███████╗██║  ██╗
+ ╚═════╝ ╚══════╝╚══════╝╚═╝     ╚══════╝╚══════╝╚══════╝╚═╝  ╚═╝
 ```
 
-**An autonomous multi-agent CLI that runs on your phone.**
+**An autonomous multi-tool CLI agent that runs entirely on DeepSeek.**
 
-Supervisor · Router · Researcher · Workers · Coder · Critic
-· Multi-key failover · RAG · Markdown skills · Termux-native
+DeepSeek login · Instant/Expert/Vision modes · Tools · RAG · Memory
+· Markdown skills · Termux-native
 
 </div>
 
@@ -20,26 +20,25 @@ Supervisor · Router · Researcher · Workers · Coder · Critic
 
 ## What it is
 
-Nexus takes a goal, plans a task DAG, assigns specialised sub-agents, runs them in
-parallel, verifies every result with a critic agent, retries or replans on failure, and
-synthesises a final answer — without stopping to ask you at every step.
+DeepSeek-Agent takes a goal, plans the steps, calls the tools it needs
+(files, shell, python, web, knowledge, memory), verifies its own work, retries
+or replans on failure, and synthesises a final answer — without stopping to ask
+you at every step.
 
 It is built for **Termux on Android**: pure-Python core, no Docker, no heavy SDK,
-no compiled dependency beyond optional numpy.
+no compiled dependency beyond optional numpy (plus `nodejs` for DeepSeek's PoW solver).
 
 ### The thing that matters most: it does not stop
 
-An autonomous agent that dies on a 401 or 429 is useless. Nexus has **three layers of
-resilience** on every single model call:
+An autonomous agent that dies on a 401 or 429 is useless. DeepSeek-Agent has **token-auto-refresh** and retries:
 
 ```
- 1. KEY ROTATION      key #1 → 429 → cooling → key #2 (you are told, run continues)
- 2. MODEL FALLBACK    mistral-medium → mistral-small → ministral-8b
- 3. PROVIDER FALLBACK mistral → openai / groq / ollama (if configured)
+ 1. TOKEN AUTO-REFRESH   token expired → re-login with saved credentials → fresh token
+ 2. STREAM RETRY         transient drop → retried automatically
+ 3. NATIVE MODES         instant / expert / vision (switch with /mode)
 ```
 
-If every key is rate-limited it waits for the soonest one to recover instead of failing.
-Keys that return 401 are quarantined and revived later. Every switch is reported to you.
+Every switch is reported to you. Credentials stay on-device (chmod 600).
 
 ---
 
@@ -48,7 +47,7 @@ Keys that return 401 are quarantined and revived later. Every switch is reported
 **One command is all you need — setup.sh does the rest:**
 
 ```bash
-git clone https://github.com/Saurabh-gzp/nexus-agent.git && cd nexus-agent
+git clone https://github.com/Saurabh-gzp/deepseek-agent.git && cd deepseek-agent
 bash setup.sh
 ```
 
@@ -69,7 +68,7 @@ deepseek
 
 `setup.sh` installs this command for you: it removes any pre-existing
 `nexus`/`deepseek` command or alias and installs its own launcher
-(`python3 nexus.py` still works inside the repo folder too).
+(`python3 deepseek.py` still works inside the repo folder too).
 
 On the first run a **login wizard** opens by itself — enter your **DeepSeek**
 account email + password (the official chat.deepseek.com account). The agent
@@ -79,7 +78,7 @@ a pasted token when a browser is unavailable, e.g. Termux).
 
 ### Slash autocomplete (`/` menu)
 
-Typing `/` at the prompt lists every command with hints. Disable with `NEXUS_FANCY_INPUT=0` or `ui.fancy_input: false` if a terminal reprints the prompt on resize.
+Typing `/` at the prompt lists every command with hints. Disable with `DEEPSEEK_FANCY_INPUT=0` or `ui.fancy_input: false` if a terminal reprints the prompt on resize.
 
 ### Optional notes
 
@@ -87,7 +86,7 @@ The default input is rock-stable everywhere. If you want `/`-command
 autocomplete and arrow-key history, enable the fancy input:
 
 ```bash
-export NEXUS_FANCY_INPUT=1        # or set ui.fancy_input: true in config/config.yaml
+export DEEPSEEK_FANCY_INPUT=1        # or set ui.fancy_input: true in config/config.yaml
 ```
 
 If your terminal ever reprints the prompt on screen resize, keep it off.
@@ -222,7 +221,7 @@ skills/
 └── content/technical_writing.md
 ```
 
-Nexus also **pre-matches** skills to each task and instructs the agent to load the best
+DeepSeek-Agent also **pre-matches** skills to each task and instructs the agent to load the best
 one first, so expertise is applied even when the model would have skipped it.
 
 Add your own — create the file and it is live immediately:
@@ -309,7 +308,7 @@ the soonest — the agent pauses briefly, it never dies.
 export MISTRAL_APIS="key1,key2,key3,..."        # ek hi var me 10+ keys (best)
 # ya numbered:
 export MISTRAL_API_KEY_1="..." ... MISTRAL_API_KEY_10="..."
-# ya CLI:  nexus keys add <key>
+# ya CLI:  deepseek keys add <key>
 ```
 
 **Hisaab (kitni keys?)** — limits per API key (free/Experiment tier: ~1 rps +
@@ -408,19 +407,19 @@ Live screenshot bug: typing "hy" triggered a 20s pipeline that created a
 
 * **"hy" → 0.4s instant reply** — zero LLM calls for greetings
   (deterministic warm replies, always in the user's script)
-* **"what's your name" → instant Nexus intro** — with a capability list;
+* **"what's your name" → instant DeepSeek-Agent intro** — with a capability list;
   internal ROUTER/SUPERVISOR names never leak
 * **Memory pollution fix** — short inputs (greetings) never get stale context
   ("hy" + an old hosting memory used to become a "hosting follow-up" plan)
 * **Vague goals no longer create files** — the supervisor just asks a friendly
   question directly (like the big agents); no absurd `goal_statement.md`
-* **`nexus ❯[/]` artifact fixed** — the prompt is now a clean `nexus ❯`
+* **`deepseek ❯[/]` artifact fixed** — the prompt is now a clean `deepseek ❯`
 * Live info (weather/news/prices) now comes from the web via the researcher —
   the "check weather.com" deflection is gone
 
 ## What's new in v1.4
 
-1. **First-run setup wizard** — run `nexus` once (without a key) → it asks:
+1. **First-run setup wizard** — run `deepseek` once (without a key) → it asks:
    pick a provider → paste a key → the key is **verified LIVE** (invalid keys
    are never saved) → "another key?" — then straight to work.
 2. **`/key` is now smart:**
@@ -435,7 +434,7 @@ Live screenshot bug: typing "hy" triggered a 20s pipeline that created a
 1. **`/key` — interactive key manager** 🔑 — menu: providers → keys → `a` add /
    `d N` delete / `t N` **live-test** (verified against the API) / `b` back / `0` exit.
    Keys are saved in `keys/<provider>.json` (chmod 600, gitignored).
-   The old `.nexus/keys.json` auto-migrates. Env keys and file keys both work.
+   The old `.deepseek/keys.json` auto-migrates. Env keys and file keys both work.
 2. **Slash autocomplete** — type `/` and every command appears with a hint;
    `/skill <tab>` completes skill ids, `/agent <tab>` names, `/mode <tab>`
    modes. Arrow keys browse history (persisted too).
@@ -523,26 +522,26 @@ providers:
 
 Any OpenAI-compatible endpoint (Groq, Together, OpenRouter, Ollama, LM Studio) works with
 zero code. For a bespoke API, subclass `BaseProvider` and register it in
-`nexus/providers/registry.py`.
+`deepseek_agent/providers/registry.py`.
 
 ---
 
 ## Project structure
 
 ```
-nexus-agent/
-├── nexus.py                    launcher
+deepseek-agent/
+├── deepseek.py                 launcher
 ├── setup.sh                    one-command setup (deps + purge + self-test)
 ├── config/config.yaml          all configuration
 ├── skills/                     markdown playbooks
 ├── workspace/                  where the agent builds things
 ├── tests/
-│   ├── test_core.py            72 offline unit tests
+│   ├── test_core.py            175 offline unit tests
 │   └── test_live.py            live API integration tests
-└── nexus/
+└── deepseek_agent/
     ├── cli/          app.py (REPL), ui.py (rich terminal UI)
     ├── core/         config.py, context.py, jsonutil.py
-    ├── providers/    keyring.py (failover), mistral.py, openai_compat.py, registry.py
+    ├── providers/    keyring.py, mistral.py, deepseek.py, registry.py
     ├── llm/          client.py (roles, rate limiting, fallback)
     ├── agents/       base.py (ReAct loop), specialists.py (6 agents)
     ├── orchestrator/ dag.py (scheduler), engine.py (autonomous loop)

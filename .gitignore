@@ -3,7 +3,7 @@
 keys/
 *.key
 *api_key*
-.nexus/
+.deepseek/
 
 # ── Runtime data ────────────────────────────────────────────
 workspace/

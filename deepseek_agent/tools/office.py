@@ -106,15 +106,15 @@ class OfficeTools:
                                     leftMargin=18 * mm, rightMargin=18 * mm,
                                     topMargin=16 * mm, bottomMargin=16 * mm)
             styles = getSampleStyleSheet()
-            styles.add(ParagraphStyle(name="HNexus", parent=styles["Heading1"], fontSize=18, spaceAfter=10))
-            styles.add(ParagraphStyle(name="BNexus", parent=styles["BodyText"], fontSize=11,
+            styles.add(ParagraphStyle(name="HDeepSeek", parent=styles["Heading1"], fontSize=18, spaceAfter=10))
+            styles.add(ParagraphStyle(name="BDeepSeek", parent=styles["BodyText"], fontSize=11,
                                       leading=15, alignment=TA_LEFT, spaceAfter=6))
-            story: List = [Paragraph(_esc(title or "Document"), styles["HNexus"]), Spacer(1, 8)]
+            story: List = [Paragraph(_esc(title or "Document"), styles["HDeepSeek"]), Spacer(1, 8)]
             for para in (body or "").split("\n"):
                 if not para.strip():
                     story.append(Spacer(1, 6))
                     continue
-                story.append(Paragraph(_esc(para), styles["BNexus"]))
+                story.append(Paragraph(_esc(para), styles["BDeepSeek"]))
             doc.build(story)
             return ToolResult(True, output=f"PDF written: {dest.relative_to(self.root)} ({dest.stat().st_size} bytes)")
         except Exception as e:  # noqa: BLE001

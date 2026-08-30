@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Nexus Agent launcher — `python nexus.py` or `./nexus.py "goal"`."""
+"""DeepSeek-Agent launcher — `python deepseek.py` or `./deepseek.py "goal"`."""
 import os
 import sys
 from pathlib import Path
@@ -23,7 +23,7 @@ def _load_dotenv() -> None:
 def main() -> int:
     _load_dotenv()
     try:
-        from nexus.cli.app import main as cli_main
+        from deepseek_agent.cli.app import main as cli_main
     except ImportError as e:
         print(f"Missing dependency: {e}\nRun:  pip install -r requirements.txt")
         return 1

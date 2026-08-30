@@ -10,7 +10,7 @@ from typing import List, Optional
 from .base import Risk, ToolRegistry, ToolResult
 from .paths import in_workspace
 
-SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".nexus",
+SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".deepseek",
              "dist", "build", ".next", ".cache", "target", ".idea"}
 BINARY_EXT = {".png", ".jpg", ".jpeg", ".gif", ".pdf", ".zip", ".tar", ".gz",
               ".exe", ".so", ".dll", ".jar", ".mp4", ".mp3", ".woff", ".ttf"}

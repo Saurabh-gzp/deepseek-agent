@@ -1,4 +1,4 @@
-# Nexus Skills
+# DeepSeek-Agent Skills
 
 Skills are markdown playbooks that give the agent expert procedures on demand.
 They use **3-level progressive disclosure** so having 50 skills costs almost no context:
