@@ -86,7 +86,12 @@ class DeepSeekApp:
             return ""
 
     def _deepseek_setup(self, force: bool = False) -> None:
-        """First-run / /login wizard: email + password -> token (auto-refreshable)."""
+        """First-run / /login wizard: email + password -> token (auto-refreshable).
+
+        The password is typed VISIBLE (the user wants to see it while typing).
+        If auto-login is blocked (e.g. AWS WAF on Termux), the wizard offers a
+        direct "paste a token from your browser" step so you can still start.
+        """
         if self._deepseek is None:
             self.ui.event("warn", "deepseek engine not active")
             return
@@ -96,10 +101,11 @@ class DeepSeekApp:
         self.ui.rule("DEEPSEEK LOGIN 🔐")
         self.ui.print("  DeepSeek-Agent logs into chat.deepseek.com with your account.\n"
                       "  The token is stored on this device only (chmod 600) and is\n"
-                      "  auto-refreshed when it expires.")
+                      "  auto-refreshed when it expires.\n"
+                      "  [muted]Tip: the password is shown as you type (not hidden).[/]")
         try:
             email = self.ui.ask("DeepSeek email / ID").strip()
-            password = self.ui.ask("DeepSeek password", secret=True).strip()
+            password = self.ui.ask("DeepSeek password").strip()   # visible, not secret
         except (KeyboardInterrupt, EOFError):
             return
         if not email or not password:
@@ -107,18 +113,35 @@ class DeepSeekApp:
             return
         prov.account.save_account(email, password)
         self._deepseek.set_paste_callback(self._paste_token)
-        with self.ui.spinner("verifying DeepSeek login…"):
-            try:
+        tok = None
+        try:
+            with self.ui.spinner("verifying DeepSeek login…"):
                 tok = prov.account.ensure_token(interactive=False,
                                                 paste_callback=self._paste_token)
-                if tok:
-                    prov._token = tok
-                    self.ui.event("ok", f"DeepSeek login OK ✓ — token saved "
-                                        f"(mode: {prov.get_mode_label()})")
-                else:
-                    self.ui.event("warn", "saved credentials; paste a token to start")
-            except Exception as e:
-                self.ui.event("warn", f"login blocked: {str(e)[:90]} — paste a token to continue")
+        except Exception as e:
+            self.ui.event("warn", f"auto-login blocked ({str(e)[:80]})")
+            tok = None
+        if not tok:
+            # Fall back to pasting a token (always works through the WAF).
+            self.ui.print("  [muted]Auto-login is blocked on this device (DeepSeek's "
+                          "AWS WAF needs a browser). You can paste a token from your "
+                          "browser to start right now — or leave it empty to skip.[/]")
+            try:
+                pasted = self.ui.ask("Paste your DeepSeek token (from browser), or Enter to skip")
+                pasted = (pasted or "").strip()
+                if pasted:
+                    prov.account.save_token(pasted)
+                    prov._token = pasted
+                    tok = pasted
+            except (KeyboardInterrupt, EOFError):
+                tok = None
+        if tok:
+            prov._token = tok
+            self.ui.event("ok", f"DeepSeek login OK ✓ — token saved "
+                                f"(mode: {prov.get_mode_label()})")
+        else:
+            self.ui.event("warn", "no token yet — use /login to add credentials or a token "
+                                  "whenever ready")
         self.ui.print("")
 
     # ------------------------------------------------------------------

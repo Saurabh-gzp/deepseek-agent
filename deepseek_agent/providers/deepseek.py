@@ -158,8 +158,8 @@ class DeepSeekAccount:
                 self._token = new
                 self.save_token(new)
                 return new
-            # HTTP blocked (WAF) -> try headless browser
-            new = browser_login(acct["email"], acct["password"])
+            # HTTP blocked (WAF) -> try headless browser (skips itself on Termux)
+            new = browser_login(acct["email"], acct["password"], notify=self.notify)
             if new:
                 self._token = new
                 self.save_token(new)
@@ -194,6 +194,19 @@ class DeepSeekAccount:
             return False
 
 
+def is_termux() -> bool:
+    """True when running under Termux (Android), where Playwright/Chromium can't run."""
+    try:
+        prefix = os.environ.get("PREFIX", "")
+        if prefix and "com.termux" in prefix:
+            return True
+        if os.path.exists("/data/data/com.termux/files/usr/bin"):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def http_login(email: str, password: str) -> Optional[str]:
     """Best-effort direct HTTP login. Returns token or None if blocked/failed."""
     try:
@@ -218,10 +231,30 @@ def http_login(email: str, password: str) -> Optional[str]:
     return None
 
 
-def browser_login(email: str, password: str) -> Optional[str]:
-    """Headless-Chromium login to pass the AWS WAF JS challenge (needs playwright)."""
+def browser_login(email: str, password: str, notify: Optional[Callable[[str, str], None]] = None) -> Optional[str]:
+    """Headless-Chromium login to pass the AWS WAF JS challenge (needs playwright).
+
+    Returns None (never raises) if Playwright/Chromium is unavailable — e.g. on
+    Termux — so the caller can fall back to pasting a token. No scary tracebacks.
+    """
+    # Playwright/Chromium cannot run on Termux — skip silently.
+    if is_termux():
+        if notify:
+            notify("warn", "browser login not available on Termux — use a pasted token instead")
+        return None
     try:
+        import playwright
         from playwright.async_api import async_playwright
+    except Exception:
+        return None
+    # Guard: the bundled Playwright driver `node` binary must exist, otherwise
+    # launching spawns a broken subprocess and spews an asyncio traceback.
+    try:
+        _driver_node = os.path.join(os.path.dirname(playwright.__file__), "driver", "node")
+        if not os.path.exists(_driver_node):
+            if notify:
+                notify("warn", "Playwright driver missing — use a pasted token instead")
+            return None
     except Exception:
         return None
     result: Dict[str, Any] = {}
