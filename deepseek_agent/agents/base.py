@@ -21,6 +21,20 @@ _PATHISH = re.compile(
     r"list_dir|read_file|find_files|search_files|not found|No such file|FileNotFound|"
     r"outside workspace|Path outside", re.I)
 
+# Live: model loaded a skill then replied "I have built and hosted … HTTP 200"
+# without ever calling write_file / start_server. Reject that as a final answer.
+_ACTION_TASK = re.compile(
+    r"\b(build|create|make|write|host|serve|deploy|fix|delete|install|generate|"
+    r"banao|bana|bnana|likho|likh|karo|kardo|host\s+kr)\b", re.I)
+_HOST_TASK = re.compile(
+    r"\b(host|serve|http\.server|start_server|localhost|locally)\b", re.I)
+_FAKE_CLAIM = re.compile(
+    r"(I have (built|created|hosted|written|made|implemented)|"
+    r"Live URL|HTTP 200|localhost:\d+|127\.0\.0\.1:\d+|"
+    r"verified with HTTP|server (is )?running|site is (live|up))", re.I)
+_WRITE_TOOLS = {"write_file", "edit_file", "start_server", "delete_path",
+                "run_shell", "run_python", "make_pptx", "make_pdf", "make_docx"}
+
 
 @dataclass
 class AgentStep:
@@ -166,6 +180,7 @@ class BaseAgent:
         specs = self.tool_specs()
         consec_fail = 0          # v1.6: brake on repeated tool failures (token fires)
         fail_flagged = False
+        fake_nudges = 0          # reject fabricated "I hosted it" finals
 
         for i in range(budget):
             # user pressed Ctrl+C → stop this agent cleanly at the next step
@@ -194,8 +209,82 @@ class BaseAgent:
             tokens += res.total_tokens
             model_used = res.model
 
+            # Drop tool calls with empty required args (live: DSML with
+            # <parameter name="path"></parameter> was executed and crashed).
+            usable = []
+            for call in (res.tool_calls or []):
+                fn = call.get("function") or {}
+                name = (fn.get("name") or "").strip()
+                if not name:
+                    continue
+                raw = fn.get("arguments") or "{}"
+                try:
+                    args = json.loads(raw) if isinstance(raw, str) else (raw or {})
+                except Exception:
+                    args = {}
+                if not isinstance(args, dict):
+                    args = {}
+                if name in ("write_file", "edit_file"):
+                    if not str(args.get("path") or "").strip() or not str(
+                            args.get("content") or args.get("new_text") or "").strip():
+                        continue
+                if name == "run_shell" and not str(args.get("command") or "").strip():
+                    continue
+                if name == "run_python" and not str(args.get("code") or "").strip():
+                    continue
+                usable.append(call)
+            if res.tool_calls and not usable:
+                # Model emitted a tool-shaped blob with empty args — nudge, don't finalize.
+                res.tool_calls = []
+                extra = ((res.content or "") + "\nEMPTY_TOOL_CALL").strip()
+                res.content = extra
+            else:
+                res.tool_calls = usable
+
             if not res.tool_calls:
                 answer = (res.content or "").strip()
+                wrote = any(s.kind == "tool" and s.ok and s.tool in _WRITE_TOOLS
+                            for s in steps)
+                hosted = any(s.kind == "tool" and s.ok and s.tool == "start_server"
+                             for s in steps)
+                needs_action = bool(_ACTION_TASK.search(task or ""))
+                needs_host = bool(_HOST_TASK.search(task or ""))
+                claimed = bool(_FAKE_CLAIM.search(answer))
+                leftover_call = bool(
+                    re.search(r"DSML|TOOL_CALL\s*:|<invoke\s+name=", answer, re.I))
+                reject = False
+                reason = ""
+                if leftover_call and fake_nudges < 3:
+                    reject = True
+                    reason = (
+                        "MALFORMED TOOL CALL: that message is markup, not a final answer. "
+                        "Emit a COMPLETE DSML block with EVERY required argument FILLED "
+                        "(write_file needs path AND content; start_server needs directory "
+                        "or command). Empty tags are rejected."
+                    )
+                elif needs_action and not wrote and fake_nudges < 2:
+                    reject = True
+                    reason = (
+                        "HONESTY CHECK: you tried to finish without calling write_file / "
+                        "run_shell / start_server. That previous message is NOT accepted. "
+                        "Call the real tools NOW with filled arguments. Do not claim work "
+                        "you did not do."
+                    )
+                elif needs_host and claimed and not hosted and fake_nudges < 2:
+                    reject = True
+                    reason = (
+                        "HONESTY CHECK: you claimed a live URL / HTTP 200 but start_server "
+                        "was NEVER called in this run. Call start_server(directory=..., "
+                        "port=..., marker=...) now, or say honestly that hosting was NOT done."
+                    )
+                if reject:
+                    fake_nudges += 1
+                    messages.append({"role": "assistant", "content": answer[:1500]})
+                    messages.append({"role": "user", "content": reason})
+                    steps.append(AgentStep(i, "think", "harness rejected incomplete/fake final"))
+                    if on_step:
+                        on_step(steps[-1])
+                    continue
                 steps.append(AgentStep(i, "answer", answer))
                 if on_step:
                     on_step(steps[-1])

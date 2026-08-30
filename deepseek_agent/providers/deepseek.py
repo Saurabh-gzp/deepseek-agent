@@ -42,6 +42,8 @@ import requests  # DeepSeek client uses `requests` (same as the working referenc
 IncompleteRead = http.client.IncompleteRead
 
 from .base import BaseProvider, ChatResult, ProviderError
+from .dsml import (build_dsml_tool_prompt, extract_dsml_calls, format_dsml_calls,
+                   looks_like_dsml, strip_dsml)
 
 # ---------------------------------------------------------------------------
 # Native-app mode rules (mirrors the official DeepSeek app constraints)
@@ -467,7 +469,7 @@ def _balanced_json(text: str, start: int) -> Optional[str]:
 
 
 def _strip_tool_calls(text: str) -> str:
-    out = text or ""
+    out = strip_dsml(text or "")
     # remove Claude-style <tool_calls>...</tool_calls> blocks and standalone <invoke>...
     out = _CALL_BLOCK_RE.sub("", out)
     out = _INVOKE_RE.sub("", out)
@@ -565,7 +567,10 @@ def _scan_marker_calls(text: str):
 
 
 def _extract_tool_calls(text: str) -> List[dict]:
-    calls: List[dict] = []
+    """DSML (DeepSeek V4 native) first, then TOOL_CALL JSON, then Claude XML."""
+    calls = extract_dsml_calls(text or "")
+    if calls:
+        return calls
     for name, args in _scan_marker_calls(text):
         if name and isinstance(args, dict):
             calls.append({
@@ -580,41 +585,7 @@ def _extract_tool_calls(text: str) -> List[dict]:
 def _system_prompt(system: str, tools: Optional[List[dict]]) -> str:
     parts = [system or "You are DeepSeek-Agent, an autonomous agent."]
     if tools:
-        lines = []
-        for spec in tools:
-            fn = spec.get("function", spec)
-            name = fn.get("name", "?")
-            desc = fn.get("description", "")
-            params = fn.get("parameters", {})
-            props = params.get("properties", {})
-            req = params.get("required", [])
-            prop_lines = []
-            for pname, pmeta in props.items():
-                mark = " [REQUIRED]" if pname in req else ""
-                ptype = (pmeta or {}).get("type", "any")
-                prop_lines.append(f"      {pname} ({ptype}){mark}")
-            args_example = {k: ("" if (pmeta or {}).get("type") != "integer" else 0)
-                            for k, pmeta in props.items()}
-            lines.append(
-                f"- {name}: {desc}\n"
-                f"    arguments:\n" + "\n".join(prop_lines) +
-                f"\n    example: TOOL_CALL: {{\"name\":\"{name}\",\"arguments\":"
-                f"{json.dumps(args_example, ensure_ascii=False)}}}")
-        parts.append(
-            "You are an autonomous agent that calls tools to get work done.\n"
-            "You have these tools. **Always fill every REQUIRED argument** with a real "
-            "value (correct paths, full file content, exact commands) — never call a tool "
-            "with empty or missing arguments:\n\n" + "\n".join(lines) +
-            "\n\nHOW TO CALL A TOOL — reply with EXACTLY ONE line (nothing before or after, "
-            "no prose, no markdown fences, no thinking in the output):\n"
-            'TOOL_CALL: {"name":"write_file","arguments":{"path":"x.py","content":"print(1)"}}\n'
-            "Accepted formats (either is fine):\n"
-            '1) TOOL_CALL: {"name":"<tool>","arguments":{<REQUIRED fields, fully filled>}}\n'
-            '2) <tool_calls><invoke name="<tool>"><parameter name="arg">value</parameter>'
-            '</invoke></tool_calls>\n'
-            "After calling a tool you will receive TOOL RESULT: <output>. Continue until the "
-            "task is complete. When finished, reply with your final answer in normal text "
-            "(no tool-call line). Never fabricate tool output — wait for the real result.")
+        parts.append(build_dsml_tool_prompt(tools))
     return "\n\n".join(parts)
 
 
@@ -632,11 +603,15 @@ def _serialize(messages: List[dict]) -> str:
         if role == "assistant":
             tcs = m.get("tool_calls")
             if tcs:
-                for tc in tcs:
-                    fn = tc.get("function", {})
-                    out.append(f"ASSISTANT TOOL CALL: {fn.get('name')} "
-                               f"{fn.get('arguments','')}")
-            if content.strip():
+                dsml = format_dsml_calls(tcs)
+                if dsml:
+                    out.append("ASSISTANT:\n" + dsml)
+                else:
+                    for tc in tcs:
+                        fn = tc.get("function", {})
+                        out.append(f"ASSISTANT TOOL CALL: {fn.get('name')} "
+                                   f"{fn.get('arguments','')}")
+            if content.strip() and not tcs:
                 out.append(f"ASSISTANT: {content}")
         elif role == "tool":
             out.append(f"TOOL RESULT ({m.get('name','tool')}): {content}")
@@ -666,6 +641,8 @@ class DeepSeekProvider(BaseProvider):
         self.account = DeepSeekAccount(Path(cfg.get("keys_dir", "./keys")), self.notify)
         self.pow = PoWSolver(Path(cfg.get("data_dir", "./.deepseek")), self.notify)
         self._session: Optional[str] = None
+        self._parent_id: Optional[str] = None
+        self._created_sessions: List[str] = []
         self._token: Optional[str] = None
         self._attach: Optional[Callable[[], str]] = None
         self._attached_files: List[tuple] = []
@@ -700,6 +677,88 @@ class DeepSeekProvider(BaseProvider):
     def has_token(self) -> bool:
         """True only when an actual token file exists (a completed login)."""
         return bool(self.account.load_cached_token())
+
+    def reset_session(self) -> None:
+        """Start a fresh DeepSeek chat thread on the next completion.
+
+        Each user goal gets its own chat.deepseek.com session so the account
+        sidebar does not become one giant mixed transcript. Sessions we create
+        are tracked and can be deleted with delete_session / /forget-chats.
+        """
+        self._session = None
+        self._parent_id = None
+
+    def current_session(self) -> Optional[str]:
+        return self._session
+
+    def created_sessions(self) -> List[str]:
+        return list(self._created_sessions)
+
+    def list_remote_sessions(self) -> List[dict]:
+        """Sessions stored on the DeepSeek account (sidebar chats)."""
+        token = self._token_or_login(interactive=False)
+        try:
+            r = requests.get(
+                f"{_BASE}/chat_session/fetch_page",
+                headers={**_HEADERS, "Authorization": f"Bearer {token}"},
+                timeout=20)
+            data = r.json() if r.status_code == 200 else {}
+        except Exception as e:
+            self.notify("warn", f"list sessions failed: {e}")
+            return []
+        biz = (data.get("data") or {}).get("biz_data") or data.get("data") or {}
+        items = (biz.get("chat_sessions") or biz.get("items") or biz.get("list")
+                 or biz.get("sessions") or [])
+        if isinstance(items, dict):
+            items = items.get("list") or items.get("items") or []
+        out = []
+        for it in items or []:
+            if not isinstance(it, dict):
+                continue
+            sid = it.get("id") or it.get("chat_session_id") or ""
+            title = it.get("title") or it.get("name") or ""
+            out.append({"id": sid, "title": title, "raw": it})
+        return out
+
+    def delete_session(self, sid: str = "") -> bool:
+        """Delete a chat session on the DeepSeek account (gone from sidebar too)."""
+        sid = (sid or self._session or "").strip()
+        if not sid:
+            return False
+        payloads = [
+            {"chat_session_id": sid},
+            {"id": sid},
+            {"ids": [sid]},
+        ]
+        paths = ["/chat_session/delete", "/chat_session/delete_chat_session"]
+        last: Any = None
+        for path in paths:
+            for payload in payloads:
+                try:
+                    data = self._request(path, payload)
+                    ok = True
+                    if isinstance(data, dict) and data.get("code") not in (None, 0, 200):
+                        ok = False
+                    if ok:
+                        if self._session == sid:
+                            self._session = None
+                        if sid in self._created_sessions:
+                            self._created_sessions.remove(sid)
+                        self.notify("ok", f"deleted DeepSeek chat session {sid[:12]}")
+                        return True
+                    last = data
+                except Exception as e:
+                    last = e
+                    continue
+        self.notify("warn", f"could not delete session {sid[:12]}: {last}")
+        return False
+
+    def delete_all_created_sessions(self) -> int:
+        n = 0
+        for sid in list(self._created_sessions):
+            if self.delete_session(sid):
+                n += 1
+        return n
 
     # ---- token ----------------------------------------------------------
     def _token_or_login(self, interactive: bool = True) -> str:
@@ -785,6 +844,8 @@ class DeepSeekProvider(BaseProvider):
                 bd = (sess.get("data", {}) or {}).get("biz_data", {}) or {}
                 # session id is under `id` (older clients used `chat_session.id`)
                 self._session = bd.get("id") or (bd.get("chat_session") or {}).get("id")
+                if self._session and self._session not in self._created_sessions:
+                    self._created_sessions.append(self._session)
             except Exception:
                 self._session = None
 
@@ -813,11 +874,20 @@ class DeepSeekProvider(BaseProvider):
         data = self._request("/chat/completion", payload,
                              pow_path="/api/v0/chat/completion", expect_json=False)
         text, think = self._collect(data)
-        calls = _extract_tool_calls(text)
+        # V4 expert/thinking often emits DSML inside the THINK stream, not RESPONSE.
+        blob = text or ""
+        if think and (looks_like_dsml(think) or "TOOL_CALL" in think
+                      or "<invoke" in think or "<tool_call" in think.lower()):
+            blob = (text or "") + "\n" + think
+        calls = _extract_tool_calls(blob)
         content = _strip_tool_calls(text).strip()
+        if calls and not content:
+            content = ""
         self._attached_files = []           # files consumed on this message
-        if think.strip():
+        if think.strip() and not calls:
             self.notify("info", f"[deepseek {rules['label']} · thinking] {think[:200]}")
+        elif think.strip() and calls:
+            self.notify("info", f"[deepseek {rules['label']} · thinking] {think[:160]}")
         return ChatResult(
             content=content,
             tool_calls=calls,

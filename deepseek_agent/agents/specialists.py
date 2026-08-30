@@ -796,7 +796,7 @@ class DeepSeekSoloAgent(BaseAgent):
     role_key = "solo"
     agent_name = "solo"
     allowed_tools = None                 # all tools
-    max_steps = 12
+    max_steps = 16
     use_skills = True
     system_prompt = (
         "You are DeepSeek-Agent, an autonomous AI assistant powered by DeepSeek. "

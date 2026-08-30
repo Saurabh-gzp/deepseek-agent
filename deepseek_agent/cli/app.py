@@ -85,6 +85,8 @@ HELP = """
   [accent]/think <on|off>[/]       DeepSeek reasoning on/off
   [accent]/search <on|off>[/]      DeepSeek web-search on/off
   [accent]/login[/]                change DeepSeek account (email+password)
+  [accent]/chats[/]                list chats stored on your DeepSeek account
+  [accent]/forget-chats[/]         delete agent-created chats from your DeepSeek account
   [accent]/verbose[/]              toggle step-by-step output
   [accent]/clear[/]                clear screen
   [accent]/exit[/]                 quit
@@ -465,6 +467,15 @@ class DeepSeekApp:
     def run_focused(self, task: str) -> None:
         """Run a single focused DeepSeek agent (DeepSeek-Agent default path)."""
         from ..agents.specialists import DeepSeekSoloAgent
+        from ..orchestrator.engine import _is_hosting_intent, quick_math
+        # Pure arithmetic never goes to the LLM (live: router/solo guessed sums).
+        ans = quick_math(task)
+        if ans is not None:
+            self.ui.phase("CALC", "solved locally — exact, no AI guessing")
+            self.ui.answer(ans, title="DEEPSEEK-AGENT RESULT")
+            self._conversation.append({"role": "user", "content": task})
+            self._conversation.append({"role": "assistant", "content": ans})
+            return
         if self._deepseek is not None and not self._deepseek.has_token():
             # No valid token yet -> prompt the login wizard, then retry once.
             self.ui.event("warn", "DeepSeek login needed — no token yet.")
@@ -483,19 +494,84 @@ class DeepSeekApp:
                     pass
         mode_label = self._deepseek.get_mode_label() if self._deepseek else "?"
         self.ui.phase("DEEPSEEK-AGENT", f"{mode_label} mode · autonomous run")
+        # Fresh DeepSeek-account chat per goal so the sidebar stays one-thread-per-task
+        # (deleting that session on chat.deepseek.com deletes this run's history).
+        if self._deepseek is not None:
+            try:
+                self._deepseek.reset_session()
+            except Exception:
+                pass
         agent = DeepSeekSoloAgent(self.ctx)
         context = self._focused_context()
-        out = agent.run(task, context=context,
-                        max_steps=int(self.config.get("autonomy.max_steps_per_agent", 12)))
+        steps_budget = int(self.config.get("autonomy.max_steps_per_agent", 16))
+        if _is_hosting_intent(task) or any(w in task.lower() for w in
+                                           ("website", "portfolio", "host", "banao", "bnana")):
+            steps_budget = max(steps_budget, 16)
+        out = agent.run(task, context=context, max_steps=steps_budget,
+                        on_step=lambda s: self.ui.task_step(
+                            type("T", (), {"id": "solo"})(), s))
+        final = out.output or "(no output)"
+        # Hosting parachute: if the user asked to host and the model never
+        # called start_server, try to serve whatever index.html it did write.
+        if _is_hosting_intent(task):
+            hosted = any(s.kind == "tool" and s.ok and s.tool == "start_server"
+                         for s in out.steps)
+            wrote = any(s.kind == "tool" and s.ok and s.tool in ("write_file", "edit_file")
+                        for s in out.steps)
+            if not hosted:
+                note = self._solo_host_parachute()
+                if note:
+                    final = (final.rstrip() + "\n\n" + note)
+                elif not wrote:
+                    final = (final.rstrip()
+                             + "\n\n⚠️ Hosting was NOT verified — no files were written "
+                               "and start_server was never called. The claim above is "
+                               "not proven.")
+                else:
+                    final = (final.rstrip()
+                             + "\n\n⚠️ Hosting was NOT verified (no successful "
+                               "start_server call).")
         self._conversation.append({"role": "user", "content": task})
-        self._conversation.append({"role": "assistant",
-                                   "content": out.output or "(no output)"})
+        self._conversation.append({"role": "assistant", "content": final})
         if len(self._conversation) > 40:        # keep a bounded rolling window
             self._conversation = self._conversation[-40:]
         self.ui.print()
-        self.ui.answer(out.output or "(no output)", title="DEEPSEEK-AGENT RESULT")
-        self.ui.print(f"[muted]{len(out.steps)} steps · {out.tokens} tokens · "
-                      f"{out.elapsed:.1f}s · {out.model}[/]")
+        self.ui.answer(final, title="DEEPSEEK-AGENT RESULT")
+        tools_n = sum(1 for s in out.steps if s.kind == "tool")
+        self.ui.print(f"[muted]{len(out.steps)} steps · {tools_n} tool calls · "
+                      f"{out.tokens} tokens · {out.elapsed:.1f}s · {out.model}[/]")
+
+    def _solo_host_parachute(self) -> str:
+        """If an index.html exists, start_server it ourselves and return proof."""
+        try:
+            ws = Path(self.config.workspace)
+            cands = sorted(ws.rglob("index.html"),
+                           key=lambda p: p.stat().st_mtime, reverse=True)
+            if not cands:
+                return ""
+            idx = cands[0]
+            rel = idx.parent.relative_to(ws)
+            title = ""
+            try:
+                import re as _re
+                m = _re.search(r"<title>\s*([^<]{2,80})</title>",
+                               idx.read_text(encoding="utf-8", errors="replace"), _re.I)
+                title = (m.group(1).strip() if m else "")[:80]
+            except Exception:
+                title = ""
+            self.ui.event("warn", f"hosting parachute → start_server on {rel}")
+            r = self.ctx.tools.execute(
+                "start_server",
+                {"directory": str(rel), "marker": title, "port": 8080},
+                "solo")
+            if r.ok:
+                self.ui.event("ok", "harness hosted + verified")
+                return "[HARNESS HOSTING]\n" + (r.output or "")[:800]
+            self.ui.event("warn", f"parachute failed: {(r.error or '')[:120]}")
+            return ""
+        except Exception as e:  # noqa: BLE001
+            self.ui.event("warn", f"parachute error: {e}")
+            return ""
 
     def _focused_context(self) -> str:
         """Recent conversation turns as context, so a follow-up continues the
@@ -1004,6 +1080,53 @@ class DeepSeekApp:
             self.ui.event("warn", "deepseek engine not active")
             return
         self._deepseek_setup(force=True)
+
+    def cmd_chats(self, _: str = "") -> None:
+        """List chat.deepseek.com sessions stored on the logged-in account."""
+        if self._deepseek is None:
+            self.ui.event("warn", "deepseek engine not active")
+            return
+        try:
+            remote = self._deepseek.list_remote_sessions()
+        except Exception as e:
+            self.ui.event("error", f"could not list chats: {e}")
+            return
+        created = set(self._deepseek.created_sessions())
+        rows = []
+        for i, s in enumerate(remote[:30], 1):
+            mark = "agent" if s.get("id") in created else "account"
+            rows.append([str(i), (s.get("id") or "")[:12], mark,
+                         (s.get("title") or "")[:50]])
+        if not rows:
+            self.ui.event("info", "no chats on this DeepSeek account (or list API empty)")
+            return
+        self.ui.table("DEEPSEEK ACCOUNT CHATS",
+                      ["#", "id", "origin", "title"], rows,
+                      ["muted", "accent", "agent", "white"])
+        self.ui.print("[muted]  /forget-chats  — delete chats THIS agent created "
+                      "(they disappear from chat.deepseek.com too)[/]")
+
+    def cmd_forget_chats(self, arg: str = "") -> None:
+        """Delete agent-created DeepSeek chats from the account."""
+        if self._deepseek is None:
+            self.ui.event("warn", "deepseek engine not active")
+            return
+        ids = list(self._deepseek.created_sessions())
+        if arg.strip() and arg.strip() not in ("all", "*"):
+            ids = [arg.strip()]
+        if not ids:
+            cur = self._deepseek.current_session()
+            ids = [cur] if cur else []
+        if not ids:
+            self.ui.event("info", "no agent-created chats to delete this run. "
+                          "Open chat.deepseek.com to delete older ones.")
+            return
+        n = 0
+        for sid in ids:
+            if self._deepseek.delete_session(sid):
+                n += 1
+        self.ui.event("ok" if n else "warn",
+                      f"deleted {n}/{len(ids)} DeepSeek chat session(s) from your account")
 
 
 # ======================================================================

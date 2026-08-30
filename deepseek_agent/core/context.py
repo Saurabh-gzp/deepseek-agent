@@ -81,7 +81,12 @@ class AgentContext:
         S = {"type": "string"}
 
         def load_skill(skill_id: str) -> ToolResult:
-            body = self.skills.load_body(skill_id)
+            body = self.skills.load_body(skill_id, max_chars=4000)
+            if len(body) > 3500:
+                body = (body[:3500]
+                        + "\n\n[skill truncated] You have the checklist. "
+                          "NOW IMPLEMENT with write_file/edit_file/start_server. "
+                          "Do not recap the skill. Do not claim work without tool calls.")
             if skill_id not in self.state["active_skills"]:
                 self.state["active_skills"].append(skill_id)
             if self.ui:
