@@ -58,6 +58,12 @@ class RAGEngine:
         self.exts = set(config.get("rag.file_extensions", [".md", ".txt", ".py"]))
         self.max_bytes = int(config.get("rag.max_file_mb", 5)) * 1024 * 1024
         self.enabled = bool(config.get("rag.enabled", True))
+        # DeepSeek has no embedding endpoint, so RAG runs keyword-only. Detect
+        # this ONCE up front and index silently — not a per-file "Embedding
+        # failed" warning for every chunked file.
+        self._embeddings_ok = self.llm.supports_embeddings()
+        if not self._embeddings_ok:
+            self.notify("info", "RAG: keyword-only index (no embedding provider available)")
 
     # ------------------------------------------------------------------
     def index_text(self, text: str, source: str, meta: Optional[dict] = None,
@@ -69,11 +75,14 @@ class RAGEngine:
             return 0
         metas = [{**(meta or {}), "chunk_index": i, "total_chunks": len(chunks)}
                  for i in range(len(chunks))]
-        try:
-            embs = self.llm.embed(chunks)
-        except Exception as e:  # noqa: BLE001
-            self.notify("warn", f"Embedding failed for {source}: {str(e)[:100]} (keyword-only index)")
-            embs = [[0.0]] * len(chunks)
+        if self._embeddings_ok:
+            try:
+                embs = self.llm.embed(chunks)
+            except Exception:  # noqa: BLE001
+                # a provider flipped mid-session; degrade this call only
+                embs = [[0.0]] * len(chunks)
+        else:
+            embs = [[0.0]] * len(chunks)          # keyword-only vector
         self.store.delete_source(source)
         return self.store.add(chunks, embs, [source] * len(chunks), metas, collection)
 

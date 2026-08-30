@@ -204,6 +204,18 @@ class LLMClient:
         with tk:
             return self._embed_impl(texts, role)
 
+    def supports_embeddings(self) -> bool:
+        """True if any enabled provider can produce embeddings.
+
+        Lets callers (e.g. RAG) decide once whether to run keyword-only,
+        instead of re-trying (and re-warning) on every call.
+        """
+        for provider_name in self.registry.order():
+            provider = self.registry.providers.get(provider_name)
+            if provider and getattr(provider, "supports_embeddings", False):
+                return True
+        return False
+
     def _embed_impl(self, texts: List[str], role: str = "embed") -> List[List[float]]:
         chain = self.config.model_chain(role)
         for provider_name in self.registry.order():
