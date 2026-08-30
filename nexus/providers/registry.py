@@ -14,11 +14,13 @@ from .base import BaseProvider
 from .keyring import KeyRing
 from .mistral import MistralProvider
 from .openai_compat import OpenAICompatibleProvider
+from .deepseek import DeepSeekProvider
 
 PROVIDER_TYPES: Dict[str, type] = {
     "mistral": MistralProvider,
     "openai_compatible": OpenAICompatibleProvider,
     "openai": OpenAICompatibleProvider,
+    "deepseek": DeepSeekProvider,
 }
 
 
@@ -54,7 +56,9 @@ class ProviderRegistry:
             for fk in file_keys.get(pname, []):        # keys from keys/<provider>.json
                 if fk not in keys:
                     keys.append(fk)
-            if not keys and not pcfg.get("api_key"):
+            cls = PROVIDER_TYPES.get(pcfg.get("type", pname))
+            token_based = bool(getattr(cls, "token_based", False)) if cls else False
+            if not keys and not pcfg.get("api_key") and not token_based:
                 self.notify("warn", f"Provider '{pname}' enabled but no API keys found — skipped")
                 continue
             ring = KeyRing(
@@ -63,13 +67,18 @@ class ProviderRegistry:
                 hard_cooldown=int(self.config.get("failover.hard_fail_cooldown", 600)),
                 notifier=self.notify if self.config.get("failover.notify_user", True) else None,
             )
-            cls = PROVIDER_TYPES.get(pcfg.get("type", pname))
             if cls is None:
                 self.notify("error", f"Unknown provider type '{pcfg.get('type')}' for {pname}")
                 continue
             merged = dict(pcfg)
             merged["max_key_rotations_per_call"] = self.config.get(
                 "failover.max_key_rotations_per_call", 6)
+            # resolve provider-relative dirs against the package root so a
+            # different CWD cannot orphan keys/ and .nexus/ (DeepSeek login).
+            for _rk in ("keys_dir", "data_dir"):
+                _rv = merged.get(_rk)
+                if _rv and not Path(str(_rv)).is_absolute():
+                    merged[_rk] = str(self.config.root / str(_rv))
             try:
                 inst = cls(merged, ring, self.notify)
                 inst.name = pname

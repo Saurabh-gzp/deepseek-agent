@@ -38,12 +38,12 @@ ok "Python $PYVER"
 # ── 2. System deps (platform-aware) ────────────────────────────
 step "System packages"
 if command -v pkg >/dev/null 2>&1; then           # Termux (Android)
-    pkg install -y python yaml 2>/dev/null || true
-    ok "Termux packages ready"
+    pkg install -y python yaml nodejs 2>/dev/null || true
+    ok "Termux packages ready (nodejs = DeepSeek PoW solver)"
 elif command -v apt >/dev/null 2>&1; then          # Debian/Ubuntu
     sudo apt update -qq 2>/dev/null || true
-    sudo apt install -y python3-pip python3-yaml 2>/dev/null || true
-    ok "apt packages ready"
+    sudo apt install -y python3-pip python3-yaml nodejs 2>/dev/null || true
+    ok "apt packages ready (nodejs = DeepSeek PoW solver)"
 elif command -v dnf >/dev/null 2>&1; then          # Fedora
     sudo dnf install -y python3-pip python3-pyyaml 2>/dev/null || true
     ok "dnf packages ready"
@@ -65,6 +65,7 @@ python3 -c "import rich"      2>/dev/null && ok "rich"       || warn "rich missi
 python3 -c "import yaml"      2>/dev/null && ok "PyYAML"     || warn "PyYAML missing"
 python3 -c "import numpy"     2>/dev/null && ok "numpy (fast RAG search)" || warn "numpy missing (RAG falls back to slow mode)"
 python3 -c "import prompt_toolkit" 2>/dev/null && ok "prompt_toolkit (nice input)" || warn "prompt_toolkit missing (basic input)"
+command -v node >/dev/null 2>&1 && ok "nodejs (DeepSeek PoW solver)" || warn "nodejs missing — DeepSeek login/chat won't work (install nodejs)"
 
 # ── 4. Fresh install: purge keys/config from an OLDER install ──
 if [ "$UPDATE_MODE" = "1" ]; then

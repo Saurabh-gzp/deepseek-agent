@@ -10,3 +10,7 @@ prompt_toolkit>=3.0.0
 
 # Optional extras the agent may install itself when a task needs them:
 #   requests, beautifulsoup4, lxml, pandas, matplotlib, fastapi, uvicorn
+
+# DeepSeek-Agent also needs the system `nodejs` runtime for its PoW solver:
+#   Termux:  pkg install nodejs
+#   Debian:  sudo apt install nodejs

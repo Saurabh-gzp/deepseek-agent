@@ -62,6 +62,7 @@ class BaseProvider(abc.ABC):
     supports_embeddings: bool = False
     supports_moderation: bool = False
     supports_ocr: bool = False
+    token_based: bool = False   # True => manages its own auth (e.g. DeepSeek login)
 
     def __init__(self, cfg: dict, keyring, notifier=None):
         self.cfg = cfg

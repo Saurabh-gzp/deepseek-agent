@@ -1,0 +1,831 @@
+"""DeepSeek web-API provider for **DeepSeek-Agent**.
+
+Talks to the SAME endpoints as the official DeepSeek web app
+(https://chat.deepseek.com/api/v0/...):
+
+  * email + password  ->  bearer token
+      - direct HTTP first (works when AWS WAF is not challenging this IP)
+      - headless Chromium (Playwright) fallback to pass the AWS WAF JS challenge
+        (auto-detected: only used when playwright is installed)
+      - on INVALID_TOKEN / 401 the provider auto re-logs-in to regenerate the
+        token using the stored email+password (the "refresh" flow)
+  * Proof-of-Work (PoW) sha3 challenge  ->  solved with Node.js + a WASM engine
+  * streaming chat completion with thinking / web-search / native modes
+    (instant / expert / vision)
+
+DeepSeek's web API has NO native function-calling, so we implement **text-based
+tool calling**: the model is instructed to emit
+``TOOL_CALL: {"name": "...", "arguments": {...}}`` inside its reply, and the
+provider parses that into OpenAI-style ``tool_calls`` so the BaseAgent ReAct
+loop (and the whole Nexus engine) works unchanged.
+
+NOTE: DeepSeek has no public embeddings / moderation / OCR endpoints, so
+``supports_embeddings`` etc. are False — the Nexus RAG automatically degrades
+to keyword search and safety skips LLM moderation.
+"""
+from __future__ import annotations
+
+import base64
+import http.client
+import json
+import os
+import re
+import subprocess
+import threading
+import time
+import urllib.error
+import urllib.request
+import uuid
+
+IncompleteRead = http.client.IncompleteRead
+from pathlib import Path
+from typing import Any, Callable, Dict, Iterator, List, Optional
+
+from .base import BaseProvider, ChatResult, ProviderError
+
+# ---------------------------------------------------------------------------
+# Native-app mode rules (mirrors the official DeepSeek app constraints)
+# ---------------------------------------------------------------------------
+MODES = {
+    "default":  {  # INSTANT
+        "model_type": "default",
+        "supports_thinking": True,
+        "supports_search": True,
+        "supports_files": True,
+        "label": "INSTANT",
+    },
+    "expert": {
+        "model_type": "expert",
+        "supports_thinking": True,
+        "supports_search": False,
+        "supports_files": False,
+        "label": "EXPERT",
+    },
+    "vision": {
+        "model_type": "vision",
+        "supports_thinking": True,
+        "supports_search": False,
+        "supports_files": True,
+        "label": "VISION",
+    },
+}
+DEFAULT_MODE = "expert"
+
+_WASM_NAME = "sha3_wasm_bg.7b9ca65ddd.wasm"
+_WASM_URL = ("https://raw.githubusercontent.com/xtekky/deepseek4free/main/dsk/"
+             "wasm/sha3_wasm_bg.7b9ca65ddd.wasm")
+_SOLVER_NAME = "pow_solver.js"
+
+_BASE = "https://chat.deepseek.com/api/v0"
+
+_HEADERS = {
+    "Content-Type": "application/json",
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"),
+    "X-Client-Platform": "web",
+    "X-Client-Version": "2.0.2",
+    "Origin": "https://chat.deepseek.com",
+    "Referer": "https://chat.deepseek.com/",
+}
+
+# ---------------------------------------------------------------------------
+# Token management (email+password -> token, cached, auto-refresh)
+# ---------------------------------------------------------------------------
+class DeepSeekAccount:
+    """Stores email/password + cached bearer token with chmod 600 (device-only)."""
+
+    def __init__(self, keys_dir: Path, notify: Callable[[str, str], None]):
+        self.keys_dir = Path(keys_dir)
+        self.keys_dir.mkdir(parents=True, exist_ok=True)
+        self.notify = notify
+        self.account_file = self.keys_dir / "deepseek_account.json"
+        self.token_file = self.keys_dir / "deepseek_token"
+        self._token: Optional[str] = None
+
+    # -- storage ----------------------------------------------------------
+    def save_account(self, email: str, password: str) -> None:
+        try:
+            self.account_file.write_text(
+                json.dumps({"email": email, "password": password}),
+                encoding="utf-8")
+            os.chmod(self.account_file, 0o600)
+        except Exception as e:
+            self.notify("warn", f"could not save account: {e}")
+
+    def load_account(self) -> Optional[Dict[str, str]]:
+        try:
+            if self.account_file.exists():
+                d = json.loads(self.account_file.read_text(encoding="utf-8"))
+                if d.get("email") and d.get("password"):
+                    return d
+        except Exception:
+            pass
+        return None
+
+    def save_token(self, token: str) -> None:
+        try:
+            self.token_file.write_text(token, encoding="utf-8")
+            os.chmod(self.token_file, 0o600)
+        except Exception as e:
+            self.notify("warn", f"could not save token: {e}")
+
+    def load_cached_token(self) -> Optional[str]:
+        if self._token:
+            return self._token
+        try:
+            if self.token_file.exists():
+                t = self.token_file.read_text(encoding="utf-8").strip()
+                if t:
+                    self._token = t
+                    return t
+        except Exception:
+            pass
+        return None
+
+    # -- token lifecycle --------------------------------------------------
+    def ensure_token(self, interactive: bool = True,
+                     paste_callback: Optional[Callable[[], str]] = None) -> str:
+        """Return a working token: cached -> login -> prompt to paste."""
+        tok = self.load_cached_token()
+        if tok and self._probe(tok):
+            return tok
+        # cached token bad/missing -> login with stored creds
+        acct = self.load_account()
+        if acct:
+            self.notify("ok", "re-logging in with saved DeepSeek credentials…")
+            new = http_login(acct["email"], acct["password"])
+            if new:
+                self._token = new
+                self.save_token(new)
+                return new
+            # HTTP blocked (WAF) -> try headless browser
+            new = browser_login(acct["email"], acct["password"])
+            if new:
+                self._token = new
+                self.save_token(new)
+                return new
+        if interactive and paste_callback:
+            self.notify("warn", "Login blocked by DeepSeek's WAF. Paste a token instead.")
+            pasted = paste_callback()
+            if pasted:
+                self._token = pasted.strip()
+                self.save_token(self._token)
+                return self._token
+        raise ProviderError(
+            "No valid DeepSeek token. Add email+password (first-run setup) or paste a "
+            "token. DeepSeek's AWS WAF may be blocking login — a pasted token from your "
+            "browser always works.", retryable=False)
+
+    def refresh(self, interactive: bool = False,
+                paste_callback: Optional[Callable[[], str]] = None) -> str:
+        """Force a new token (called on INVALID_TOKEN/401)."""
+        self._token = None
+        return self.ensure_token(interactive=interactive, paste_callback=paste_callback)
+
+    def _probe(self, token: str) -> bool:
+        try:
+            r = urllib.request.Request(
+                f"{_BASE}/chat_session/fetch_page",
+                headers={**_HEADERS, "Authorization": f"Bearer {token}"})
+            with urllib.request.urlopen(r, timeout=12) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                return data.get("code") == 0
+        except Exception:
+            return False
+
+
+def http_login(email: str, password: str) -> Optional[str]:
+    """Best-effort direct HTTP login. Returns token or None if blocked/failed."""
+    try:
+        payload = json.dumps({
+            "email": email, "password": password,
+            "device_id": str(uuid.uuid4()), "os": "Android",
+        }).encode()
+        req = urllib.request.Request(
+            f"{_BASE}/users/login",
+            data=payload,
+            headers={**_HEADERS, "Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+        if body.get("code") == 0:
+            tok = (body.get("data", {}).get("biz_data", {})
+                   .get("user", {}).get("token"))
+            return tok or None
+    except Exception:
+        return None
+    return None
+
+
+def browser_login(email: str, password: str) -> Optional[str]:
+    """Headless-Chromium login to pass the AWS WAF JS challenge (needs playwright)."""
+    try:
+        from playwright.async_api import async_playwright
+    except Exception:
+        return None
+    result: Dict[str, Any] = {}
+    import asyncio
+
+    async def _run():
+        async with async_playwright() as p:
+            try:
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-blink-features=AutomationControlled"])
+            except Exception:
+                return
+            ctx = await browser.new_context(user_agent=_HEADERS["User-Agent"])
+            page = await ctx.new_page()
+            found: List[str] = []
+
+            async def on_resp(resp):
+                try:
+                    if "login" in resp.url and "json" in resp.headers.get("content-type", ""):
+                        body = await resp.json()
+                        def find(o):
+                            if isinstance(o, dict):
+                                for k, v in o.items():
+                                    if isinstance(v, str) and len(v) > 40 and k in ("token", "biz_token"):
+                                        found.append(v)
+                                    find(v)
+                            elif isinstance(o, list):
+                                for x in o:
+                                    find(x)
+                        find(body)
+                except Exception:
+                    pass
+            page.on("response", on_resp)
+            try:
+                await page.goto("https://chat.deepseek.com/sign_in", timeout=60000,
+                                wait_until="domcontentloaded")
+            except Exception:
+                pass
+            for _ in range(20):
+                await asyncio.sleep(2)
+                inputs = await page.query_selector_all("input")
+                if len(inputs) >= 2:
+                    break
+            else:
+                await browser.close()
+                return
+            inputs = await page.query_selector_all("input")
+            await inputs[0].fill(email)
+            await inputs[1].fill(password)
+            await asyncio.sleep(0.3)
+            for btn in await page.query_selector_all("button"):
+                if (await btn.inner_text()).strip().lower() in ("log in", "sign in", "login", "continue"):
+                    await btn.click()
+                    break
+            else:
+                await page.keyboard.press("Enter")
+            for _ in range(30):
+                await asyncio.sleep(1)
+                if found:
+                    break
+            result["token"] = found[0] if found else None
+            await browser.close()
+
+    try:
+        asyncio.run(_run())
+    except Exception:
+        return None
+    return result.get("token")
+
+
+# ---------------------------------------------------------------------------
+# Proof-of-Work (sha3) challenge solver via Node.js + WASM
+# ---------------------------------------------------------------------------
+_SOLVER_JS = r"""
+const fs = require('fs');
+const WASM_PATH = process.env.DS_WASM_PATH || 'sha3_wasm_bg.7b9ca65ddd.wasm';
+async function main() {
+  const config = JSON.parse(process.argv[2]);
+  const buf = fs.readFileSync(WASM_PATH);
+  const mod = await WebAssembly.compile(buf);
+  const inst = await WebAssembly.instantiate(mod, {});
+  const mem = inst.exports.memory;
+  const prefix = `${config.salt}_${config.expire_at}_`;
+  function w(s) {
+    const e = Buffer.from(s, 'utf-8'); const n = e.length;
+    const p = inst.exports.__wbindgen_export_0(n, 1);
+    new Uint8Array(mem.buffer).set(e, p); return {ptr:p, length:n};
+  }
+  const rp = inst.exports.__wbindgen_add_to_stack_pointer(-16);
+  try {
+    const c = w(config.challenge), pf = w(prefix);
+    inst.exports.wasm_solve(rp, c.ptr, c.length, pf.ptr, pf.length, config.difficulty);
+    const st = new Int32Array(mem.buffer)[rp/4];
+    if (st === 0) process.exit(1);
+    const val = new Float64Array(mem.buffer)[(rp+8)/8];
+    const out = {algorithm:config.algorithm, challenge:config.challenge, salt:config.salt,
+      answer:Math.floor(val), signature:config.signature, target_path:config.target_path};
+    console.log(Buffer.from(JSON.stringify(out)).toString('base64'));
+  } finally { inst.exports.__wbindgen_add_to_stack_pointer(16); }
+}
+main().catch(()=>process.exit(1));
+"""
+
+
+class PoWSolver:
+    def __init__(self, data_dir: Path, notify: Callable[[str, str], None]):
+        self.data_dir = Path(data_dir)
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.notify = notify
+        self.wasm = self.data_dir / _WASM_NAME
+        self.solver = self.data_dir / _SOLVER_NAME
+        self._lock = threading.Lock()
+        if not self.solver.exists():
+            try:
+                self.solver.write_text(_SOLVER_JS, encoding="utf-8")
+            except Exception:
+                pass
+
+    def _ensure_wasm(self) -> None:
+        if self.wasm.exists():
+            return
+        with self._lock:
+            if self.wasm.exists():
+                return
+            try:
+                self.notify("warn", "downloading DeepSeek PoW engine (one-time)…")
+                urllib.request.urlretrieve(_WASM_URL, self.wasm)
+            except Exception as e:
+                raise ProviderError(f"could not fetch PoW WASM: {e}", retryable=False)
+
+    def solve(self, token: str, target_path: str) -> str:
+        self._ensure_wasm()
+        try:
+            body = json.dumps({"target_path": target_path}).encode()
+            req = urllib.request.Request(
+                f"{_BASE}/chat/create_pow_challenge",
+                data=body, headers={**_HEADERS, "Authorization": f"Bearer {token}"},
+                method="POST")
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            ch = data["data"]["biz_data"]["challenge"]
+        except Exception as e:
+            raise ProviderError(f"PoW challenge failed: {e}")
+        env = dict(os.environ)
+        env["DS_WASM_PATH"] = str(self.wasm)
+        try:
+            r = subprocess.run(["node", str(self.solver), json.dumps(ch)],
+                               capture_output=True, text=True, env=env, timeout=30,
+                               cwd=str(self.data_dir))
+            out = (r.stdout or "").strip()
+            if not out:
+                raise ProviderError("PoW solver returned nothing")
+            return out
+        except FileNotFoundError:
+            raise ProviderError("node.js is required for DeepSeek (install: pkg install nodejs)",
+                                retryable=False)
+        except Exception as e:
+            raise ProviderError(f"PoW solve failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Text-based tool calling: the model emits TOOL_CALL JSON in its answer.
+# ---------------------------------------------------------------------------
+_TOOL_CALL_RE = re.compile(r"TOOL[\s_]*CALL\s*[:：]?\s*", re.IGNORECASE)
+_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_\-]*")
+
+
+def _balanced_json(text: str, start: int) -> Optional[str]:
+    """Return the balanced JSON object starting at text[start] == '{'.
+
+    Handles nested braces and string escapes so trailing tokens (e.g.
+    DeepSeek's ``FINISHED`` marker) don't break extraction.
+    """
+    n = len(text)
+    depth = 0
+    in_str = False
+    esc = False
+    i = start
+    while i < n:
+        c = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+        else:
+            if c == '"':
+                in_str = True
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start:i + 1]
+        i += 1
+    return None
+
+
+def _strip_tool_calls(text: str) -> str:
+    out = text or ""
+    # remove Claude-style <tool_calls>...</tool_calls> blocks and standalone <invoke>...
+    out = _CALL_BLOCK_RE.sub("", out)
+    out = _INVOKE_RE.sub("", out)
+    out = _SELFCLOSE_INVOKE_RE.sub("", out)
+    # remove TOOL CALL: [name] {json} spans
+    spans = []
+    for m in _TOOL_CALL_RE.finditer(out):
+        after = m.end()
+        nm = _NAME_RE.match(out, after)
+        if nm and out[nm.end():nm.end() + 1] in (" ", "\t", "{", "("):
+            after = nm.end()
+        i = after
+        while i < len(out) and out[i] in " \t:：=(":
+            i += 1
+        end = i
+        if i < len(out) and out[i] == "{":
+            block = _balanced_json(out, i)
+            if block:
+                end = i + len(block)
+        spans.append((m.start(), end))
+    for start, end in reversed(spans):
+        out = out[:start] + out[end:]
+    # drop DeepSeek's trailing FINISHED marker
+    out = re.sub(r"\s*FINISHED\s*$", "", out)
+    return out
+
+
+# Claude/Anthropic-style XML tool calls the DeepSeek model sometimes emits:
+#   <tool_calls><invoke name="write_file"><parameter name="path">x</parameter>...</invoke></tool_calls>
+_INVOKE_RE = re.compile(r"<invoke\s+name=\"([^\"]+)\"\s*>(.*?)</invoke>", re.DOTALL)
+_PARAM_RE = re.compile(r"<parameter\s+name=\"([^\"]+)\">(.*?)</parameter>", re.DOTALL)
+_SELFCLOSE_INVOKE_RE = re.compile(r"<invoke\s+name=\"([^\"]+)\"\s*/>")
+
+_CALL_BLOCK_RE = re.compile(r"<tool_calls>.*?</tool_calls>", re.DOTALL)
+
+
+def _extract_xml_calls(text: str) -> List[dict]:
+    calls: List[dict] = []
+    for m in _INVOKE_RE.finditer(text or ""):
+        name = m.group(1).strip()
+        if not name:
+            continue
+        args: Dict[str, Any] = {}
+        for pm in _PARAM_RE.finditer(m.group(2)):
+            key = pm.group(1).strip()
+            val = pm.group(2).strip()
+            try:
+                val = json.loads(val)      # parse numbers/bools/json
+            except Exception:
+                pass
+            args[key] = val
+        calls.append({
+            "id": f"call_{int(time.time()*1000)}",
+            "type": "function",
+            "function": {"name": name, "arguments": json.dumps(args)},
+        })
+    return calls
+
+
+def _scan_marker_calls(text: str):
+    """Yield (name, args_dict) for every `TOOL CALL: ...` occurrence.
+
+    Supports both `TOOL CALL: name {"args":...}` and
+    `TOOL CALL: {"name":...,"arguments":...}` layouts.
+    """
+    for m in _TOOL_CALL_RE.finditer(text or ""):
+        after = m.end()
+        name = ""
+        nm = _NAME_RE.match(text, after)
+        if nm and text[nm.end():nm.end() + 1] in (" ", "\t", "{", "("):
+            name = nm.group(0)
+            after = nm.end()
+        # skip whitespace / colon to the JSON object
+        i = after
+        while i < len(text) and text[i] in " \t:：=(":
+            i += 1
+        if i >= len(text) or text[i] != "{":
+            continue
+        block = _balanced_json(text, i)
+        if not block:
+            continue
+        try:
+            obj = json.loads(block)
+        except Exception:
+            continue
+        if not name:
+            name = str(obj.get("name", ""))
+        args = obj.get("arguments", obj if not obj.get("name") else {})
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except Exception:
+                args = {"_raw": args}
+        yield name, args
+
+
+def _extract_tool_calls(text: str) -> List[dict]:
+    calls: List[dict] = []
+    for name, args in _scan_marker_calls(text):
+        if name and isinstance(args, dict):
+            calls.append({
+                "id": f"call_{int(time.time()*1000)}",
+                "type": "function",
+                "function": {"name": name, "arguments": json.dumps(args)},
+            })
+    calls.extend(_extract_xml_calls(text))
+    return calls
+
+
+def _system_prompt(system: str, tools: Optional[List[dict]]) -> str:
+    parts = [system or "You are DeepSeek-Agent, an autonomous agent."]
+    if tools:
+        lines = []
+        for spec in tools:
+            fn = spec.get("function", spec)
+            name = fn.get("name", "?")
+            desc = fn.get("description", "")
+            params = fn.get("parameters", {})
+            props = params.get("properties", {})
+            req = params.get("required", [])
+            prop_lines = []
+            for pname, pmeta in props.items():
+                mark = " [REQUIRED]" if pname in req else ""
+                ptype = (pmeta or {}).get("type", "any")
+                prop_lines.append(f"      {pname} ({ptype}){mark}")
+            args_example = {k: ("" if (pmeta or {}).get("type") != "integer" else 0)
+                            for k, pmeta in props.items()}
+            lines.append(
+                f"- {name}: {desc}\n"
+                f"    arguments:\n" + "\n".join(prop_lines) +
+                f"\n    example: TOOL_CALL: {{\"name\":\"{name}\",\"arguments\":"
+                f"{json.dumps(args_example, ensure_ascii=False)}}}")
+        parts.append(
+            "You are an autonomous agent that calls tools to get work done.\n"
+            "You have these tools. **Always fill every REQUIRED argument** with a real "
+            "value (correct paths, full file content, exact commands) — never call a tool "
+            "with empty or missing arguments:\n\n" + "\n".join(lines) +
+            "\n\nHOW TO CALL A TOOL — reply with EXACTLY ONE line (nothing before or after, "
+            "no prose, no markdown fences, no thinking in the output):\n"
+            'TOOL_CALL: {"name":"write_file","arguments":{"path":"x.py","content":"print(1)"}}\n'
+            "Accepted formats (either is fine):\n"
+            '1) TOOL_CALL: {"name":"<tool>","arguments":{<REQUIRED fields, fully filled>}}\n'
+            '2) <tool_calls><invoke name="<tool>"><parameter name="arg">value</parameter>'
+            '</invoke></tool_calls>\n'
+            "After calling a tool you will receive TOOL RESULT: <output>. Continue until the "
+            "task is complete. When finished, reply with your final answer in normal text "
+            "(no tool-call line). Never fabricate tool output — wait for the real result.")
+    return "\n\n".join(parts)
+
+
+def _serialize(messages: List[dict]) -> str:
+    """Flatten OpenAI-style messages into a single text prompt for DeepSeek."""
+    out: List[str] = []
+    for m in messages:
+        role = m.get("role", "user")
+        if role == "system":
+            continue
+        content = m.get("content") or ""
+        if isinstance(content, list):
+            content = "".join(c.get("text", "") for c in content if isinstance(c, dict))
+        content = str(content)
+        if role == "assistant":
+            tcs = m.get("tool_calls")
+            if tcs:
+                for tc in tcs:
+                    fn = tc.get("function", {})
+                    out.append(f"ASSISTANT TOOL CALL: {fn.get('name')} "
+                               f"{fn.get('arguments','')}")
+            if content.strip():
+                out.append(f"ASSISTANT: {content}")
+        elif role == "tool":
+            out.append(f"TOOL RESULT ({m.get('name','tool')}): {content}")
+        elif role == "user":
+            # tag prior user turns to distinguish from the current one
+            out.append(f"USER: {content}")
+    return "\n".join(out)
+
+
+# ---------------------------------------------------------------------------
+# Provider
+# ---------------------------------------------------------------------------
+class DeepSeekProvider(BaseProvider):
+    name = "deepseek"
+    supports_tools = True          # via text-based tool calling
+    supports_embeddings = False
+    supports_moderation = False
+    supports_ocr = False
+    token_based = True             # auth via email+password -> bearer token
+
+    def __init__(self, cfg: dict, keyring, notifier=None):
+        super().__init__(cfg, keyring, notifier)
+        self.mode = cfg.get("mode", DEFAULT_MODE)
+        self.thinking = bool(cfg.get("thinking", True))
+        self.search = bool(cfg.get("search", False))
+        self.timeout = int(cfg.get("timeout", 180))
+        self.account = DeepSeekAccount(Path(cfg.get("keys_dir", "./keys")), self.notify)
+        self.pow = PoWSolver(Path(cfg.get("data_dir", "./.nexus")), self.notify)
+        self._session: Optional[str] = None
+        self._token: Optional[str] = None
+        self._attach: Optional[Callable[[], str]] = None
+        self._attached_files: List[tuple] = []
+        self._stream_buf = False
+
+    # ---- public controls (used by the CLI) ------------------------------
+    def set_mode(self, mode: str) -> str:
+        mode = (mode or "").lower()
+        if mode == "instant":
+            mode = "default"
+        if mode not in MODES:
+            raise ValueError("mode must be instant|expert|vision")
+        self.mode = mode
+        return mode
+
+    def get_mode_label(self) -> str:
+        return MODES[self.mode]["label"]
+
+    def set_thinking(self, on: bool) -> None:
+        self.thinking = bool(on)
+
+    def set_search(self, on: bool) -> None:
+        self.search = bool(on)
+
+    def set_paste_callback(self, cb: Callable[[], str]) -> None:
+        self._attach = cb
+
+    def account_ok(self) -> bool:
+        return self.account.load_account() is not None or bool(self.account.load_cached_token())
+
+    # ---- token ----------------------------------------------------------
+    def _token_or_login(self, interactive: bool = True) -> str:
+        if self._token:
+            return self._token
+        self._token = self.account.ensure_token(interactive=interactive,
+                                                paste_callback=self._attach)
+        return self._token
+
+    # ---- low-level request ----------------------------------------------
+    def _request(self, path: str, payload: dict, pow_path: str = "",
+                 expect_json: bool = True) -> Any:
+        """POST to DeepSeek. Returns parsed JSON, or raw text for SSE streams."""
+        token = self._token_or_login()
+        transient = (IncompleteRead, ConnectionResetError, TimeoutError,
+                     ConnectionError, urllib.error.URLError, OSError)
+        last_err: Optional[Exception] = None
+        for attempt in range(1, 4):            # up to 3 tries on transient errors
+            try:
+                headers = {**_HEADERS, "Authorization": f"Bearer {token}"}
+                if pow_path:
+                    headers["x-ds-pow-response"] = self.pow.solve(token, pow_path)
+                body = json.dumps(payload).encode()
+                req = urllib.request.Request(
+                    f"{_BASE}{path}", data=body, headers=headers, method="POST")
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    raw = resp.read().decode("utf-8", "replace")
+                if not expect_json:
+                    return raw
+                try:
+                    data = json.loads(raw)
+                except Exception:
+                    # server returned SSE/plain even though we asked JSON
+                    return raw
+                if data.get("code") in (40003, 40004):       # INVALID_TOKEN / expired
+                    if attempt == 1:
+                        self.notify("warn", "DeepSeek token expired — regenerating…")
+                        token = self.account.refresh(
+                            interactive=False, paste_callback=self._attach)
+                        self._token = token
+                        continue
+                return data
+            except urllib.error.HTTPError as e:
+                if e.code in (401, 403) and attempt == 1:
+                    self.notify("warn", "DeepSeek auth failed — refreshing token…")
+                    try:
+                        token = self.account.refresh(interactive=False,
+                                                     paste_callback=self._attach)
+                        self._token = token
+                        continue
+                    except Exception:
+                        pass
+                raise ProviderError(f"DeepSeek HTTP {e.code}: {e.read().decode()[:200]}",
+                                    status=e.code)
+            except transient as e:             # network hiccup / truncated SSE
+                last_err = e
+                if isinstance(e, IncompleteRead):
+                    self.notify("warn", f"DeepSeek stream cut short ({attempt}/3) — retrying…")
+                else:
+                    self.notify("warn", f"DeepSeek network error ({attempt}/3): {e}")
+                time.sleep(min(3, 0.5 * attempt))
+                continue
+        raise ProviderError(f"DeepSeek request failed after retries: {last_err}")
+
+    # ---- completion -----------------------------------------------------
+    def chat(self, model: str, messages: List[dict], tools: Optional[List[dict]] = None,
+             **params: Any) -> ChatResult:
+        # find system content
+        system = ""
+        for m in messages:
+            if m.get("role") == "system":
+                system = str(m.get("content") or "")
+        prompt = _system_prompt(system, tools) + "\n\n## Conversation\n" + _serialize(messages)
+        if not self._session:
+            try:
+                sess = self._request("/chat_session/create", {"character_id": None})
+                self._session = (sess.get("data", {}).get("biz_data", {})
+                                 .get("chat_session", {}).get("id"))
+            except Exception:
+                self._session = None
+
+        rules = MODES[self.mode]
+        thinking = self.thinking
+        search = self.search
+        if not rules["supports_search"] and search:
+            self.notify("warn", f"web search blocked in {rules['label']} mode — disabled")
+            search = False
+        file_ids = [f[0] for f in self._attached_files if rules["supports_files"]]
+        if self._attached_files and not rules["supports_files"]:
+            self.notify("warn", f"attached files blocked in {rules['label']} mode — detached")
+            self._attached_files = []
+            file_ids = []
+
+        payload = {
+            "chat_session_id": self._session,
+            "parent_message_id": None,
+            "prompt": prompt,
+            "stream": True,
+            "ref_file_ids": file_ids,
+            "thinking_enabled": bool(thinking),
+            "search_enabled": bool(search),
+            "model_type": rules["model_type"],
+        }
+        data = self._request("/chat/completion", payload,
+                             pow_path="/api/v0/chat/completion", expect_json=False)
+        text, think = self._collect(data)
+        calls = _extract_tool_calls(text)
+        content = _strip_tool_calls(text).strip()
+        self._attached_files = []           # files consumed on this message
+        if think.strip():
+            self.notify("info", f"[deepseek {rules['label']} · thinking] {think[:200]}")
+        return ChatResult(
+            content=content,
+            tool_calls=calls,
+            model=f"deepseek-{self.mode}",
+            provider=self.name,
+            key_label="deepseek",
+            prompt_tokens=0,
+            completion_tokens=0,
+            finish_reason="stop",
+            latency=0.0,
+            raw={"text": text, "thinking": think},
+        )
+
+    def _collect(self, data: Any) -> tuple:
+        """Extract RESPONSE + THINK text from the completion SSE body."""
+        text: List[str] = []
+        think: List[str] = []
+        state = {"frag": "RESPONSE"}   # current fragment type for bare 'v' continuations
+        if isinstance(data, dict):
+            # server sometimes buffers events into a JSON wrapper
+            self._collect_event(data, text, think, state)
+            return "".join(text), "".join(think)
+        if isinstance(data, str):
+            for line in data.splitlines():
+                line = line.strip()
+                if not line.startswith("data:"):
+                    continue
+                js = line[5:].strip()
+                if js == "[DONE]":
+                    break
+                try:
+                    d = json.loads(js)
+                except Exception:
+                    continue
+                self._collect_event(d, text, think, state)
+        return "".join(text), "".join(think)
+
+    @staticmethod
+    def _collect_event(d: dict, text: List[str], think: List[str], state: dict) -> None:
+        # "v" is either a fragment-bundle dict or a bare string continuation
+        v = d.get("v")
+        if isinstance(v, dict) and "response" in v:
+            resp = v["response"]
+            frags = resp.get("fragments") or []
+            if frags:
+                f = frags[0]
+                state["frag"] = f.get("type", "RESPONSE")
+                (think if state["frag"] == "THINK" else text).append(f.get("content", ""))
+            if isinstance(resp.get("content"), str) and resp["content"]:
+                text.append(resp["content"])
+        elif isinstance(v, str):
+            (think if state["frag"] == "THINK" else text).append(v)
+        elif d.get("o") == "APPEND":
+            val = d.get("v", "")
+            path = d.get("p", "")
+            if isinstance(val, list) and "fragments" in path:
+                if val:
+                    state["frag"] = val[0].get("type", "RESPONSE")
+                    (think if state["frag"] == "THINK" else text).append(
+                        val[0].get("content", ""))
+            elif path == "response/fragments/-1/content":
+                (think if state["frag"] == "THINK" else text).append(
+                    val if isinstance(val, str) else "")
+
+    def embed(self, model: str, texts: List[str]) -> List[List[float]]:
+        raise NotImplementedError("DeepSeek has no embeddings endpoint (RAG uses keyword fallback)")

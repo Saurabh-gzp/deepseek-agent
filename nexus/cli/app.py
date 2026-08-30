@@ -36,7 +36,11 @@ HELP = """
   [accent]/auto <goal>[/]          force full autonomous orchestration
   [accent]/agent <name> <task>[/]  run one specific agent directly
   [accent]/cd <path>[/]            change workspace
+  [accent]/mode <instant|expert|vision>[/]  DeepSeek native mode
   [accent]/mode <smart|always|never>[/]  approval mode
+  [accent]/think <on|off>[/]       DeepSeek reasoning on/off
+  [accent]/search <on|off>[/]      DeepSeek web-search on/off
+  [accent]/login[/]                change DeepSeek account (email+password)
   [accent]/verbose[/]              toggle step-by-step output
   [accent]/clear[/]                clear screen
   [accent]/exit[/]                 quit
@@ -59,6 +63,63 @@ class NexusApp:
         self.ctx.approval_handler = self._approval
         self.orchestrator = Orchestrator(self.ctx)
         self.running = True
+        self._deepseek = self._find_deepseek()
+
+    def _find_deepseek(self):
+        """Return the DeepSeek provider instance if it is the active engine."""
+        try:
+            reg = self.ctx.llm.registry
+            if reg.default_name == "deepseek":
+                return reg.get("deepseek")
+        except Exception:
+            pass
+        return None
+
+    def _deepseek_ok(self) -> bool:
+        return self._deepseek is not None and self._deepseek.account_ok()
+
+    def _paste_token(self) -> str:
+        """Called when login is WAF-blocked: ask the user to paste a token."""
+        try:
+            return self.ui.ask("Paste your DeepSeek token (from your browser)").strip()
+        except Exception:
+            return ""
+
+    def _deepseek_setup(self, force: bool = False) -> None:
+        """First-run / /login wizard: email + password -> token (auto-refreshable)."""
+        if self._deepseek is None:
+            self.ui.event("warn", "deepseek engine not active")
+            return
+        prov = self._deepseek
+        if not force and prov.account_ok():
+            return
+        self.ui.rule("DEEPSEEK LOGIN 🔐")
+        self.ui.print("  DeepSeek-Agent logs into chat.deepseek.com with your account.\n"
+                      "  The token is stored on this device only (chmod 600) and is\n"
+                      "  auto-refreshed when it expires.")
+        try:
+            email = self.ui.ask("DeepSeek email / ID").strip()
+            password = self.ui.ask("DeepSeek password", secret=True).strip()
+        except (KeyboardInterrupt, EOFError):
+            return
+        if not email or not password:
+            self.ui.event("warn", "email and password both required — setup skipped")
+            return
+        prov.account.save_account(email, password)
+        self._deepseek.set_paste_callback(self._paste_token)
+        with self.ui.spinner("verifying DeepSeek login…"):
+            try:
+                tok = prov.account.ensure_token(interactive=False,
+                                                paste_callback=self._paste_token)
+                if tok:
+                    prov._token = tok
+                    self.ui.event("ok", f"DeepSeek login OK ✓ — token saved "
+                                        f"(mode: {prov.get_mode_label()})")
+                else:
+                    self.ui.event("warn", "saved credentials; paste a token to start")
+            except Exception as e:
+                self.ui.event("warn", f"login blocked: {str(e)[:90]} — paste a token to continue")
+        self.ui.print("")
 
     # ------------------------------------------------------------------
     def _approval(self, tool: str, args: dict, agent: str):
@@ -85,8 +146,10 @@ class NexusApp:
             hints = {
                 "/skill": sorted(self.ctx.skills.skills.keys()),
                 "/skills": [""],
-                "/agent": ["researcher", "worker", "coder", "critic", "supervisor"],
-                "/mode": ["smart", "always", "never"],
+                "/agent": ["researcher", "worker", "coder", "critic", "supervisor", "solo"],
+                "/mode": ["smart", "always", "never", "instant", "expert", "vision"],
+                "/think": ["on", "off"],
+                "/search": ["on", "off"],
                 "/cd": ["../", "./workspace"],
             }
             self.ui.completer = NexusCompleter(hints)
@@ -112,6 +175,12 @@ class NexusApp:
                 return
             reg = self.ctx.llm.registry
             if reg.total_keys() > 0:
+                return
+            # DeepSeek engine: first-run is email+password (not API keys)
+            if reg.default_name == "deepseek":
+                marker.parent.mkdir(parents=True, exist_ok=True)
+                self._deepseek_setup(force=False)
+                marker.write_text("done")
                 return
         except Exception:
             return
@@ -180,17 +249,27 @@ class NexusApp:
         except Exception:
             pass
         reg = self.ctx.llm.registry
+        is_ds = reg.default_name == "deepseek"
+        provider_label = "deepseek" if is_ds else (reg.default_name or "none")
+        model_label = self.config.model_for("supervisor")
+        if is_ds:
+            model_label = "DeepSeek-Agent"
+            if self._deepseek is not None:
+                provider_label = f"deepseek · {self._deepseek.get_mode_label()} mode"
         self.ui.banner(
             self.config.get("app.version", "1.0.0"),
-            reg.default_name or "none",
+            provider_label,
             reg.total_keys(),
-            self.config.model_for("supervisor"),
+            model_label,
             str(self.config.workspace),
         )
         n_sk = len(self.ctx.skills.skills)
         rag_n = self.ctx.rag.store.count() if self.ctx.rag else 0
         self.ui.print(f"[muted]  {n_sk} skills · {len(self.ctx.tools.names())} tools · "
                       f"{rag_n} KB chunks · approval={self.config.get('safety.approval_mode')}[/]\n")
+        if is_ds:
+            self.ui.print("[muted]  DeepSeek-Agent · /mode instant|expert|vision · "
+                          "/think on|off · /search on|off · /login change account[/]")
         self.ui.print("[muted]  Ctrl+C stops a running task — then type a correction; "
                       "your conversation context is always kept.[/]\n")
         if self.ctx.memory:
@@ -288,10 +367,29 @@ class NexusApp:
 
     # ---------------- goal execution ----------------
     def run_goal(self, goal: str, force: bool = False) -> None:
-        report = self.orchestrator.handle(goal, force_orchestration=force)
+        if self._deepseek is not None:
+            self.run_focused(goal)
+        else:
+            report = self.orchestrator.handle(goal, force_orchestration=force)
+            self.ui.print()
+            self.ui.answer(report.final or "(no output)")
+            self.ui.stats_line(report)
+
+    def run_focused(self, task: str) -> None:
+        """Run a single focused DeepSeek agent (DeepSeek-Agent default path)."""
+        from ..agents.specialists import DeepSeekSoloAgent
+        if not self._deepseek_ok():
+            self.ui.event("warn", "DeepSeek login needed first. Add your DeepSeek account "
+                            "(email + password) — see first-run setup or /login.")
+            return
+        mode_label = self._deepseek.get_mode_label() if self._deepseek else "?"
+        self.ui.phase("DEEPSEEK-AGENT", f"{mode_label} mode · autonomous run")
+        agent = DeepSeekSoloAgent(self.ctx)
+        out = agent.run(task, max_steps=int(self.config.get("autonomy.max_steps_per_agent", 12)))
         self.ui.print()
-        self.ui.answer(report.final or "(no output)")
-        self.ui.stats_line(report)
+        self.ui.answer(out.output or "(no output)", title="DEEPSEEK-AGENT RESULT")
+        self.ui.print(f"[muted]{len(out.steps)} steps · {out.tokens} tokens · "
+                      f"{out.elapsed:.1f}s · {out.model}[/]")
 
     # ---------------- commands ----------------
     def cmd_help(self, _: str = "") -> None:
@@ -738,12 +836,43 @@ class NexusApp:
         self.ui.event("ok", f"workspace = {p}")
 
     def cmd_mode(self, arg: str) -> None:
+        arg = (arg or "").strip().lower()
+        if self._deepseek is not None and arg in ("instant", "expert", "vision"):
+            try:
+                m = self._deepseek.set_mode(arg)
+                self.ui.event("ok", f"DeepSeek native mode = {m.upper()} "
+                                    f"({self._deepseek.get_mode_label()})")
+            except Exception as e:
+                self.ui.event("error", str(e))
+            return
         if arg in ("smart", "always", "never"):
             self.config.set("safety.approval_mode", arg)
             self.ui.event("ok", f"approval mode = {arg}"
                                 + (" [warn](YOLO — no confirmations!)[/]" if arg == "never" else ""))
         else:
-            self.ui.event("warn", "usage: /mode smart|always|never")
+            self.ui.event("warn", "usage: /mode instant|expert|vision  |  /mode smart|always|never")
+
+    def cmd_think(self, arg: str) -> None:
+        if self._deepseek is None:
+            self.ui.event("warn", "deepseek engine not active")
+            return
+        on = (arg or "").lower() in ("on", "1", "true", "yes")
+        self._deepseek.set_thinking(on)
+        self.ui.event("ok", f"DeepSeek thinking = {'ON' if on else 'OFF'}")
+
+    def cmd_search(self, arg: str) -> None:
+        if self._deepseek is None:
+            self.ui.event("warn", "deepseek engine not active")
+            return
+        on = (arg or "").lower() in ("on", "1", "true", "yes")
+        self._deepseek.set_search(on)
+        self.ui.event("ok", f"DeepSeek web-search = {'ON' if on else 'OFF'}")
+
+    def cmd_login(self, _: str = "") -> None:
+        if self._deepseek is None:
+            self.ui.event("warn", "deepseek engine not active")
+            return
+        self._deepseek_setup(force=True)
 
 
 # ======================================================================

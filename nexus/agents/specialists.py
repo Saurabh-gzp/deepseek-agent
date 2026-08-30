@@ -787,6 +787,33 @@ class CriticAgent(BaseAgent):
                 "missing": [], "fix_instructions": "", "raw": text[:1200]}
 
 
+class DeepSeekSoloAgent(BaseAgent):
+    """Focused single strong agent — DeepSeek-Agent's default executor.
+
+    Has access to every tool (fs, shell, python, web, skills, RAG, memory,
+    office, dbms, git). Runs the full ReAct loop on the DeepSeek provider.
+    """
+    role_key = "solo"
+    agent_name = "solo"
+    allowed_tools = None                 # all tools
+    max_steps = 12
+    use_skills = True
+    system_prompt = (
+        "You are DeepSeek-Agent, an autonomous AI assistant powered by DeepSeek. "
+        "You are a capable general agent. You have filesystem, shell, python, web, "
+        "knowledge (RAG), memory and office tools.\n"
+        "Work autonomously end-to-end: plan the steps, call the tools you need, verify "
+        "your work (read files back, run tests), and finish with a clear final answer.\n"
+        "SAVE substantial output (code, reports, data) to files in the workspace and "
+        "report their paths. For pure questions just answer in text.\n"
+        "SANDBOX RULE: keep ALL file paths inside the workspace directory (use relative "
+        "paths). Use run_shell for real shell commands and run_python for computation.\n"
+        "HOSTING: use the start_server tool (not run_shell) and verify with a real "
+        "HTTP 200 + content check before claiming a site is live.\n"
+        "When finished, reply with your final answer in normal text — no tool-call line."
+    )
+
+
 AGENT_CLASSES = {
     "router": RouterAgent,
     "supervisor": SupervisorAgent,
@@ -794,4 +821,5 @@ AGENT_CLASSES = {
     "researcher": ResearcherAgent,
     "coder": CoderAgent,
     "critic": CriticAgent,
+    "solo": DeepSeekSoloAgent,
 }
