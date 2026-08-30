@@ -26,7 +26,9 @@ providers:
     type: deepseek                   # deepseek_agent/providers/deepseek.py
     # DeepSeek-Agent logs in with email+password -> bearer token
     # (saved to keys/deepseek_account.json + keys/deepseek_token, chmod 600).
-    # Native app mode: instant | expert | vision  (switch at runtime with /mode)
+    # Native app mode: instant | expert | vision.
+    # Default is AUTO — the agent picks the mode per task (instant for
+    # chat/math, expert for coding, vision for images). Pin with `/mode`.
     mode: expert
     thinking: true
     search: false

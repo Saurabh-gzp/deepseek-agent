@@ -97,7 +97,7 @@ Typing `/` lists every command with hints (enable autocomplete with `DEEPSEEK_FA
 /rag                     /index <path>        /forget-index
 /memory                  /remember k=v        /sessions   /resume <id>
 /plan <goal>             /auto <goal>         /agent <name> <task>
-/mode instant|expert|vision                 # DeepSeek native mode
+/mode auto|instant|expert|vision            # DeepSeek mode (auto = pick per task)
 /mode smart|always|never                    # approval mode
 /cd <path>               /verbose            /clear      /exit
 ```
@@ -144,6 +144,35 @@ Every specialist runs on **DeepSeek** — expert mode by default, instant for fa
 - It **hosts and verifies** sites itself with `start_server` and checks for an `HTTP 200` + the exact `<title>` marker — it will not hand you a "run this yourself" command.
 - The **critic** verifies acceptance criteria; if it fails, the supervisor replans the failed task only.
 - Hard time budgets and an honesty rule keep it from fabricating results.
+
+---
+
+## Modes (automatic + manual)
+
+DeepSeek has three native modes, and DeepSeek-Agent **picks the right one
+automatically for every task** (`/mode auto` is the default):
+
+| The task looks like… | Mode chosen |
+|---|---|
+| conversation, chat, quick questions, simple math | **INSTANT** |
+| coding, building, research, debugging, complex work | **EXPERT** |
+| an image / screenshot / photo | **VISION** |
+
+So `9393383+8383883` runs on **INSTANT** (fast and cheap), while `build me a
+todo API` automatically runs on **EXPERT**. You can still pin a mode:
+
+| Command | Effect |
+|---|---|
+| `/mode auto` | pick instant/expert/vision per task (default) |
+| `/mode instant` · `/mode expert` · `/mode vision` | pin that mode |
+| `/think on\|off` | toggle the reasoning chain |
+| `/search on\|off` | toggle DeepSeek's native web search |
+
+The active mode shows in the banner.
+
+**Conversation memory:** recent turns are threaded into every run, so a follow-up
+like `+8383838383` right after an arithmetic result continues the calculation
+instead of being treated as a brand-new, ambiguous input.
 
 ---
 

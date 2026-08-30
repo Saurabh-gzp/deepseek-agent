@@ -62,21 +62,27 @@ deepseek             # -> asks for your DeepSeek email + password
 
 ---
 
-## Modes (manual switch)
+## Modes (automatic + manual)
 
-DeepSeek's native app modes, switched at runtime:
+DeepSeek has three native modes and DeepSeek-Agent **chooses the right one per
+task automatically** (`/mode auto`, the default):
 
-| Command | Mode | Notes |
-|---|---|---|
-| `/mode instant` | **INSTANT** | fast, supports web-search + files |
-| `/mode expert`  | **EXPERT** | deep reasoning (thinking chain) |
-| `/mode vision`  | **VISION** | image/document understanding |
+| Task looks like… | Mode |
+|---|---|
+| conversation, chat, quick questions, simple math | **INSTANT** |
+| coding, building, research, debugging, complex work | **EXPERT** |
+| image / screenshot / photo | **VISION** |
 
-Plus:
-- `/think on|off`  — toggle the reasoning chain
-- `/search on|off` — toggle DeepSeek's native web search (blocked in expert/vision)
+| Command | Effect |
+|---|---|
+| `/mode auto` | pick instant/expert/vision per task (default) |
+| `/mode instant` · `/mode expert` · `/mode vision` | pin that mode |
+| `/think on\|off` | toggle the reasoning chain |
+| `/search on\|off` | toggle DeepSeek's native web search (blocked in expert/vision) |
 
-The current mode is shown in the banner.
+The current mode is shown in the banner. Recent conversation turns are threaded
+into every run, so a follow-up like `+8383838383` after an arithmetic result
+continues the calculation instead of being treated as a brand-new input.
 
 ---
 

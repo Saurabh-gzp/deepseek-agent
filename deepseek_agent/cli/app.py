@@ -14,6 +14,50 @@ from ..core.context import AgentContext
 from ..orchestrator.engine import Orchestrator
 from .ui import UI
 
+
+# ---------------------------------------------------------------------------
+# Automatic DeepSeek mode selection.
+#
+# DeepSeek exposes three native modes and the agent picks the right one for
+# each task automatically (unless the user overrides with `/mode`):
+#   - vision  -> image / screenshot / picture / photo tasks
+#   - expert  -> coding, building, research, debugging, complex work
+#   - instant -> conversation, chat, quick questions, simple math, trivial
+# The solo agent always finishes on the same provider instance, so the chosen
+# mode is simply set before the run.
+# ---------------------------------------------------------------------------
+_VISION_RE = (
+    r"\.(png|jpe?g|gif|webp|bmp|svg)\b"
+    r"|(?:image|picture|photo|screenshot|photo|pic)\w*\b"
+    r"|kya (?:dikh|dikhta|hai).*?(?:image|photo|pic|picture)"
+    r"|see_image"
+    r"|describe (?:this|the) (?:image|picture|photo|screenshot)"
+    r"|what('| i| i| is).{0,30}?(?:image|picture|photo)"
+    r"|(?:image|picture|photo|pic)[:\s]+[^ ]+\.(png|jpe?g|gif|webp|bmp)"
+)
+_EXPERT_RE = (
+    r"build|create|make|fix|repair|write|code|program|script|function|class|"
+    r"module|app|application|website|web ?site|site|page|project|research|"
+    r"analy[sz]e|automate|deploy|implement|debug|test\b|sqlite|database|db\b|"
+    r"api\b|git\b|repo|refactor|optimize|configure|install|server|host|"
+    r"compile|parse|transform|convert|generate|scrape|scrap|crawl|"
+    r"machine learning|ml\b|neural|docker|kubernetes|pipeline|"
+    r"create a file|write a |build a |make a |\bin the workspace\b|"
+    r"script that|program that|function that|tool that|cli\b"
+)
+
+
+def auto_select_mode(goal: str) -> str:
+    """Pick instant | expert | vision from the task text."""
+    g = (goal or "").strip().lower()
+    if not g:
+        return "instant"
+    if __import__("re").search(_VISION_RE, g):
+        return "vision"
+    if __import__("re").search(_EXPERT_RE, g):
+        return "expert"
+    return "instant"
+
 HELP = """
 [brand]COMMANDS[/]
   [accent]/help[/]                 show this help
@@ -36,7 +80,7 @@ HELP = """
   [accent]/auto <goal>[/]          force full autonomous orchestration
   [accent]/agent <name> <task>[/]  run one specific agent directly
   [accent]/cd <path>[/]            change workspace
-  [accent]/mode <instant|expert|vision>[/]  DeepSeek native mode
+  [accent]/mode <auto|instant|expert|vision>[/]  DeepSeek native mode (auto = pick per task)
   [accent]/mode <smart|always|never>[/]  approval mode
   [accent]/think <on|off>[/]       DeepSeek reasoning on/off
   [accent]/search <on|off>[/]      DeepSeek web-search on/off
@@ -64,6 +108,12 @@ class DeepSeekApp:
         self.orchestrator = Orchestrator(self.ctx)
         self.running = True
         self._deepseek = self._find_deepseek()
+        # Auto mode selection (instant/expert/vision) is ON by default and can
+        # be overridden per-turn with `/mode instant|expert|vision`; `/mode auto`
+        # re-enables it. `_conversation` carries recent turns so a follow-up like
+        # "+8383838383" after "9393383+8383883" continues correctly.
+        self._auto_mode = True
+        self._conversation: List[dict] = []
 
     def _find_deepseek(self):
         """Return the DeepSeek provider instance if it is the active engine."""
@@ -177,7 +227,7 @@ class DeepSeekApp:
                 "/skill": sorted(self.ctx.skills.skills.keys()),
                 "/skills": [""],
                 "/agent": ["researcher", "worker", "coder", "critic", "supervisor", "solo"],
-                "/mode": ["smart", "always", "never", "instant", "expert", "vision"],
+                "/mode": ["auto", "smart", "always", "never", "instant", "expert", "vision"],
                 "/think": ["on", "off"],
                 "/search": ["on", "off"],
                 "/cd": ["../", "./workspace"],
@@ -305,7 +355,7 @@ class DeepSeekApp:
         self.ui.print(f"[muted]  {n_sk} skills · {len(self.ctx.tools.names())} tools · "
                       f"{rag_n} KB chunks · approval={self.config.get('safety.approval_mode')}[/]\n")
         if is_ds:
-            self.ui.print("[muted]  DeepSeek-Agent · /mode instant|expert|vision · "
+            self.ui.print("[muted]  DeepSeek-Agent · /mode auto|instant|expert|vision · "
                           "/think on|off · /search on|off · /login change account[/]")
         self.ui.print("[muted]  Ctrl+C stops a running task — then type a correction; "
                       "your conversation context is always kept.[/]\n")
@@ -423,14 +473,45 @@ class DeepSeekApp:
                 self.ui.event("warn", "still no DeepSeek token — use /login to add one, "
                                 "or paste a token, then try again.")
                 return
+        if self._deepseek is not None:
+            # Automatic mode selection: pick instant/expert/vision for this task
+            # unless the user pinned a mode with /mode.
+            if self._auto_mode:
+                try:
+                    self._deepseek.set_mode(auto_select_mode(task))
+                except Exception:
+                    pass
         mode_label = self._deepseek.get_mode_label() if self._deepseek else "?"
         self.ui.phase("DEEPSEEK-AGENT", f"{mode_label} mode · autonomous run")
         agent = DeepSeekSoloAgent(self.ctx)
-        out = agent.run(task, max_steps=int(self.config.get("autonomy.max_steps_per_agent", 12)))
+        context = self._focused_context()
+        out = agent.run(task, context=context,
+                        max_steps=int(self.config.get("autonomy.max_steps_per_agent", 12)))
+        self._conversation.append({"role": "user", "content": task})
+        self._conversation.append({"role": "assistant",
+                                   "content": out.output or "(no output)"})
+        if len(self._conversation) > 40:        # keep a bounded rolling window
+            self._conversation = self._conversation[-40:]
         self.ui.print()
         self.ui.answer(out.output or "(no output)", title="DEEPSEEK-AGENT RESULT")
         self.ui.print(f"[muted]{len(out.steps)} steps · {out.tokens} tokens · "
                       f"{out.elapsed:.1f}s · {out.model}[/]")
+
+    def _focused_context(self) -> str:
+        """Recent conversation turns as context, so a follow-up continues the
+        thread (e.g. a "+8383838383" after an arithmetic result) instead of
+        treating every input as a brand-new standalone task."""
+        if not self._conversation:
+            return ""
+        lines = ["## Previous conversation (use this context to continue the "
+                 "conversation correctly)"]
+        for msg in self._conversation[-6:]:
+            role = "USER" if msg["role"] == "user" else "ASSISTANT"
+            content = (msg["content"] or "").strip().replace("\n", " ")
+            if not content:
+                continue
+            lines.append(f"{role}: {content[:500]}")
+        return "\n".join(lines)
 
     # ---------------- commands ----------------
     def cmd_help(self, _: str = "") -> None:
@@ -878,9 +959,16 @@ class DeepSeekApp:
 
     def cmd_mode(self, arg: str) -> None:
         arg = (arg or "").strip().lower()
+        if arg == "auto":
+            self._auto_mode = True
+            # pick the mode for nothing pending, just re-enable
+            self.ui.event("ok", "DeepSeek mode = AUTO (instant/expert/vision chosen "
+                                "per task)")
+            return
         if self._deepseek is not None and arg in ("instant", "expert", "vision"):
             try:
                 m = self._deepseek.set_mode(arg)
+                self._auto_mode = False           # user pinned the mode
                 self.ui.event("ok", f"DeepSeek native mode = {m.upper()} "
                                     f"({self._deepseek.get_mode_label()})")
             except Exception as e:
@@ -891,7 +979,9 @@ class DeepSeekApp:
             self.ui.event("ok", f"approval mode = {arg}"
                                 + (" [warn](YOLO — no confirmations!)[/]" if arg == "never" else ""))
         else:
-            self.ui.event("warn", "usage: /mode instant|expert|vision  |  /mode smart|always|never")
+            self.ui.event("warn",
+                          "usage: /mode auto | instant|expert|vision  |  "
+                          "/mode smart|always|never")
 
     def cmd_think(self, arg: str) -> None:
         if self._deepseek is None:
