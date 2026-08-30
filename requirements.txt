@@ -1,6 +1,7 @@
 # Core (required) — all pure-Python, install cleanly on Termux/ARM
 rich>=13.0.0
 PyYAML>=6.0
+requests>=2.28.0    # DeepSeek provider HTTP client (Android UA, WAF-safe)
 
 # Recommended: fast vector math for RAG (Termux: pkg install python-numpy)
 numpy>=1.24

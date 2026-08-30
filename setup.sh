@@ -63,6 +63,7 @@ pip3 install $PIP_FLAGS -r requirements.txt 2>/dev/null \
   || die "pip install failed — try manually: pip3 install -r requirements.txt"
 python3 -c "import rich"      2>/dev/null && ok "rich"       || warn "rich missing (UI will be plain)"
 python3 -c "import yaml"      2>/dev/null && ok "PyYAML"     || warn "PyYAML missing"
+python3 -c "import requests"  2>/dev/null && ok "requests (DeepSeek HTTP)" || warn "requests missing — DeepSeek chat won't work (install requests)"
 python3 -c "import numpy"     2>/dev/null && ok "numpy (fast RAG search)" || warn "numpy missing (RAG falls back to slow mode)"
 python3 -c "import prompt_toolkit" 2>/dev/null && ok "prompt_toolkit (nice input)" || warn "prompt_toolkit missing (basic input)"
 command -v node >/dev/null 2>&1 && ok "nodejs (DeepSeek PoW solver)" || warn "nodejs missing — DeepSeek login/chat won't work (install nodejs)"

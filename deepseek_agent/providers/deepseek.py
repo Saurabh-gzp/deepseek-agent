@@ -33,13 +33,13 @@ import re
 import subprocess
 import threading
 import time
-import urllib.error
-import urllib.request
 import uuid
-
-IncompleteRead = http.client.IncompleteRead
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional
+
+import requests  # DeepSeek client uses `requests` (same as the working reference script)
+
+IncompleteRead = http.client.IncompleteRead
 
 from .base import BaseProvider, ChatResult, ProviderError
 
@@ -78,10 +78,13 @@ _SOLVER_NAME = "pow_solver.js"
 
 _BASE = "https://chat.deepseek.com/api/v0"
 
+# The official Android-app UA bypasses the AWS WAF (the desktop web UA gets
+# a `challenge` response and 202). The working reference client uses this UA.
+_UA = "DeepSeek/2.0.2 (Android; API)"
+
 _HEADERS = {
     "Content-Type": "application/json",
-    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                   "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"),
+    "User-Agent": _UA,
     "X-Client-Platform": "web",
     "X-Client-Version": "2.0.2",
     "Origin": "https://chat.deepseek.com",
@@ -184,12 +187,13 @@ class DeepSeekAccount:
 
     def _probe(self, token: str) -> bool:
         try:
-            r = urllib.request.Request(
+            r = requests.get(
                 f"{_BASE}/chat_session/fetch_page",
-                headers={**_HEADERS, "Authorization": f"Bearer {token}"})
-            with urllib.request.urlopen(r, timeout=12) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                return data.get("code") == 0
+                headers={**_HEADERS, "Authorization": f"Bearer {token}"},
+                timeout=12)
+            if r.status_code != 200:
+                return False
+            return r.json().get("code") == 0
         except Exception:
             return False
 
@@ -208,20 +212,26 @@ def is_termux() -> bool:
 
 
 def http_login(email: str, password: str) -> Optional[str]:
-    """Best-effort direct HTTP login. Returns token or None if blocked/failed."""
+    """Direct HTTP login using the Android UA (bypasses the AWS WAF).
+
+    Same approach as the working reference DeepSeek client. Returns token or None.
+    """
     try:
-        payload = json.dumps({
+        login_headers = {
+            "Content-Type": "application/json",
+            "User-Agent": _UA,
+            "Origin": "https://chat.deepseek.com",
+            "Referer": "https://chat.deepseek.com/",
+        }
+        payload = {
             "email": email, "password": password,
             "device_id": str(uuid.uuid4()), "os": "Android",
-        }).encode()
-        req = urllib.request.Request(
-            f"{_BASE}/users/login",
-            data=payload,
-            headers={**_HEADERS, "Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
+        }
+        resp = requests.post(f"{_BASE}/users/login", headers=login_headers,
+                             json=payload, timeout=20)
+        if resp.status_code != 200:
+            return None
+        body = resp.json()
         if body.get("code") == 0:
             tok = (body.get("data", {}).get("biz_data", {})
                    .get("user", {}).get("token"))
@@ -382,20 +392,20 @@ class PoWSolver:
                 return
             try:
                 self.notify("warn", "downloading DeepSeek PoW engine (one-time)…")
-                urllib.request.urlretrieve(_WASM_URL, self.wasm)
+                r = requests.get(_WASM_URL, timeout=60)
+                r.raise_for_status()
+                self.wasm.write_bytes(r.content)
             except Exception as e:
                 raise ProviderError(f"could not fetch PoW WASM: {e}", retryable=False)
 
     def solve(self, token: str, target_path: str) -> str:
         self._ensure_wasm()
         try:
-            body = json.dumps({"target_path": target_path}).encode()
-            req = urllib.request.Request(
+            resp = requests.post(
                 f"{_BASE}/chat/create_pow_challenge",
-                data=body, headers={**_HEADERS, "Authorization": f"Bearer {token}"},
-                method="POST")
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
+                headers={**_HEADERS, "Authorization": f"Bearer {token}"},
+                json={"target_path": target_path}, timeout=20)
+            data = resp.json()
             ch = data["data"]["biz_data"]["challenge"]
         except Exception as e:
             raise ProviderError(f"PoW challenge failed: {e}")
@@ -702,28 +712,43 @@ class DeepSeekProvider(BaseProvider):
     # ---- low-level request ----------------------------------------------
     def _request(self, path: str, payload: dict, pow_path: str = "",
                  expect_json: bool = True) -> Any:
-        """POST to DeepSeek. Returns parsed JSON, or raw text for SSE streams."""
+        """POST to DeepSeek using `requests` + the Android UA (WAF-safe).
+
+        Returns parsed JSON for normal calls, or the raw SSE text for streams.
+        """
         token = self._token_or_login()
-        transient = (IncompleteRead, ConnectionResetError, TimeoutError,
-                     ConnectionError, urllib.error.URLError, OSError)
+        transient = (requests.exceptions.ConnectionError,
+                     requests.exceptions.Timeout,
+                     requests.exceptions.ChunkedEncodingError,
+                     IncompleteRead, ConnectionResetError, TimeoutError, OSError)
         last_err: Optional[Exception] = None
         for attempt in range(1, 4):            # up to 3 tries on transient errors
             try:
                 headers = {**_HEADERS, "Authorization": f"Bearer {token}"}
                 if pow_path:
                     headers["x-ds-pow-response"] = self.pow.solve(token, pow_path)
-                body = json.dumps(payload).encode()
-                req = urllib.request.Request(
-                    f"{_BASE}{path}", data=body, headers=headers, method="POST")
-                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                    raw = resp.read().decode("utf-8", "replace")
+                resp = requests.post(
+                    f"{_BASE}{path}", headers=headers, json=payload,
+                    timeout=self.timeout, stream=not expect_json)
+                if resp.status_code != 200:
+                    if resp.status_code in (401, 403) and attempt == 1:
+                        self.notify("warn", "DeepSeek auth failed — refreshing token…")
+                        try:
+                            token = self.account.refresh(
+                                interactive=False, paste_callback=self._attach)
+                            self._token = token
+                            continue
+                        except Exception:
+                            pass
+                    raise ProviderError(
+                        f"DeepSeek HTTP {resp.status_code}: {resp.text[:200]}",
+                        status=resp.status_code)
                 if not expect_json:
-                    return raw
+                    return resp.text
                 try:
-                    data = json.loads(raw)
+                    data = resp.json()
                 except Exception:
-                    # server returned SSE/plain even though we asked JSON
-                    return raw
+                    return resp.text
                 if data.get("code") in (40003, 40004):       # INVALID_TOKEN / expired
                     if attempt == 1:
                         self.notify("warn", "DeepSeek token expired — regenerating…")
@@ -732,21 +757,12 @@ class DeepSeekProvider(BaseProvider):
                         self._token = token
                         continue
                 return data
-            except urllib.error.HTTPError as e:
-                if e.code in (401, 403) and attempt == 1:
-                    self.notify("warn", "DeepSeek auth failed — refreshing token…")
-                    try:
-                        token = self.account.refresh(interactive=False,
-                                                     paste_callback=self._attach)
-                        self._token = token
-                        continue
-                    except Exception:
-                        pass
-                raise ProviderError(f"DeepSeek HTTP {e.code}: {e.read().decode()[:200]}",
-                                    status=e.code)
+            except ProviderError:
+                raise
             except transient as e:             # network hiccup / truncated SSE
                 last_err = e
-                if isinstance(e, IncompleteRead):
+                if isinstance(e, IncompleteRead) or isinstance(
+                        e, requests.exceptions.ChunkedEncodingError):
                     self.notify("warn", f"DeepSeek stream cut short ({attempt}/3) — retrying…")
                 else:
                     self.notify("warn", f"DeepSeek network error ({attempt}/3): {e}")
@@ -766,8 +782,9 @@ class DeepSeekProvider(BaseProvider):
         if not self._session:
             try:
                 sess = self._request("/chat_session/create", {"character_id": None})
-                self._session = (sess.get("data", {}).get("biz_data", {})
-                                 .get("chat_session", {}).get("id"))
+                bd = (sess.get("data", {}) or {}).get("biz_data", {}) or {}
+                # session id is under `id` (older clients used `chat_session.id`)
+                self._session = bd.get("id") or (bd.get("chat_session") or {}).get("id")
             except Exception:
                 self._session = None
 
