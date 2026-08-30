@@ -81,18 +81,23 @@ else
     fi
 fi
 
-# ── 5. Install the `nexus` launcher command ───────────────────
-step "Installing the 'nexus' command"
+# ── 5. Install the `deepseek` launcher command ─────────────────
+step "Installing the 'deepseek' command"
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# 5a. Remove ANY existing 'nexus' command (binary, wrapper, alias)
+# 5a. Remove ANY existing 'nexus'/'deepseek' command (binary, wrapper, alias)
 for d in "${PREFIX:-/nonexistent}/bin" /usr/local/bin /usr/bin "$HOME/.local/bin" "$HOME/bin"; do
     [ -n "$d" ] && [ -f "$d/nexus" ] && rm -f "$d/nexus" && ok "removed old 'nexus' at $d/nexus"
+    [ -n "$d" ] && [ -f "$d/deepseek" ] && rm -f "$d/deepseek" && ok "removed old 'deepseek' at $d/deepseek"
 done
 for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile" "$HOME/.bash_profile"; do
     if [ -f "$rc" ] && grep -q "alias nexus=" "$rc" 2>/dev/null; then
         sed -i '\|alias nexus=|d' "$rc"
         ok "removed old 'alias nexus=…' from $rc (restart your shell)"
+    fi
+    if [ -f "$rc" ] && grep -q "alias deepseek=" "$rc" 2>/dev/null; then
+        sed -i '\|alias deepseek=|d' "$rc"
+        ok "removed old 'alias deepseek=…' from $rc (restart your shell)"
     fi
 done
 
@@ -118,9 +123,9 @@ else
 fi
 
 # 5c. Write the wrapper
-printf '#!/usr/bin/env bash\nexec python3 "%s/nexus.py" "$@"\n' "$REPO_DIR" > "$BIN_DIR/nexus"
-chmod +x "$BIN_DIR/nexus"
-ok "'nexus' command installed → $BIN_DIR/nexus"
+printf '#!/usr/bin/env bash\nexec python3 "%s/nexus.py" "$@"\n' "$REPO_DIR" > "$BIN_DIR/deepseek"
+chmod +x "$BIN_DIR/deepseek"
+ok "'deepseek' command installed → $BIN_DIR/deepseek"
 
 # ── 6. Sanity: launcher import test ────────────────────────────
 step "Self-test"
@@ -133,11 +138,12 @@ printf "\n${BOLD}${GREEN}══════════════ SETUP COMPLE
 printf """
 ${BOLD}To launch the agent, just type:${R}
 
-    ${CYAN}nexus${R}
+    ${CYAN}deepseek${R}
 
 (and ${CYAN}python3 nexus.py${R} still works too)
 
-On the first run the agent opens an API-key wizard itself and
-asks for your ${BOLD}Mistral AI${R} key (free: console.mistral.ai).
-Once the key is in, you're ready to go. Enjoy! 🚀
+On the first run the agent opens a login wizard and asks for your
+${BOLD}DeepSeek${R} account email + password (the official chat.deepseek.com
+account). The token is stored on your device and auto-refreshes.
+Once logged in, you're ready to go. Enjoy! 🚀
 """

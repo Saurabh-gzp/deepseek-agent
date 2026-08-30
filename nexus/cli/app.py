@@ -877,7 +877,7 @@ class NexusApp:
 
 # ======================================================================
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(prog="nexus", description="Nexus — autonomous CLI agent")
+    ap = argparse.ArgumentParser(prog="deepseek", description="DeepSeek-Agent — autonomous CLI agent on DeepSeek")
     ap.add_argument("goal", nargs="*", help="goal to run (one-shot mode)")
     ap.add_argument("-c", "--config", help="path to config.yaml")
     ap.add_argument("-w", "--workspace", help="workspace directory")
@@ -890,7 +890,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.version:
         from ..core.config import get_config as _gc
-        print(f"nexus-agent {_gc().get('app.version', '1.8.7')}")
+        print(f"deepseek-agent {_gc().get('app.version', '2.0.0')}")
         return 0
 
     app = NexusApp(args.config, args.theme, not args.quiet, args.mode, args.workspace)

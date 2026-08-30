@@ -57,25 +57,25 @@ What `setup.sh` does:
 2. **Python deps** — `rich`, `PyYAML`, `numpy`, `prompt_toolkit`
 3. **Old-install cleanup** — removes any previously saved keys/config, so the
    fresh clone stores its own keys in this directory
-4. **`nexus` command** — removes any pre-existing `nexus` command/alias and installs its own launcher
+4. **`deepseek` command** — removes any pre-existing `nexus`/`deepseek` command/alias and installs its own launcher
 5. **Self-test** — verifies the core imports
 6. **Prints the launch command**
 
 Then launch the agent — just one word, from anywhere:
 
 ```bash
-nexus
+deepseek
 ```
 
 `setup.sh` installs this command for you: it removes any pre-existing
-`nexus` command or alias and installs its own launcher (`python3 nexus.py`
-still works inside the repo folder too).
+`nexus`/`deepseek` command or alias and installs its own launcher
+(`python3 nexus.py` still works inside the repo folder too).
 
-On the first run the key wizard opens by itself — paste your **Mistral AI**
-key (free: [console.mistral.ai](https://console.mistral.ai)) and you're done.
-Keys are saved with chmod 600 **only on your device**, inside `keys/`.
-
-More keys = more uptime — add them anytime at runtime with `/keys add sk-...`.
+On the first run a **login wizard** opens by itself — enter your **DeepSeek**
+account email + password (the official chat.deepseek.com account). The agent
+logs in, stores the token with chmod 600 **only on your device**, and
+**auto-refreshes it when it expires**. Login is AWS-WAF aware (falls back to
+a pasted token when a browser is unavailable, e.g. Termux).
 
 ### Slash autocomplete (`/` menu)
 
@@ -106,10 +106,10 @@ git pull && bash setup.sh --update
 ## Run
 
 ```bash
-nexus                                    # interactive REPL
-nexus "build me a todo API"               # one-shot
-nexus -m never "fix the bug"             # full autonomy, no confirmations
-nexus -w ~/projects/myapp                # point at an existing project
+deepseek                                  # interactive REPL
+deepseek "build me a todo API"            # one-shot
+deepseek -m never "fix the bug"           # full autonomy, no confirmations
+deepseek -w ~/projects/myapp              # point at an existing project
 ```
 
 | Flag | Meaning |
@@ -486,11 +486,11 @@ In real TUI runs the agent attempted these evasions — all blocked by determini
 
 ### See it all in one round
 ```bash
-nexus
-nexus ❯ /keys
-nexus ❯ hello, who are you?                    # router direct — supervisor bypass
-nexus ❯ /auto Create squares.py that prints 1-10 squares, run it, save output to squares.txt
-nexus ❯ delete squares.txt permanently          # approval panel — press 'n' and the file survives
+deepseek
+deepseek ❯ /keys
+deepseek ❯ hello, who are you?                 # instant reply
+deepseek ❯ /auto Create squares.py that prints 1-10 squares, run it, save output to squares.txt
+deepseek ❯ delete squares.txt permanently      # approval panel — press 'n' and the file survives
 ```
 
 ## Commands
