@@ -620,6 +620,97 @@ def _system_prompt(system: str, tools: Optional[List[dict]]) -> str:
     return "\n\n".join(parts)
 
 
+def turn_prompt(primed: bool, system: str, tools: Optional[List[dict]],
+                messages: List[dict]) -> str:
+    """Build the *next* DeepSeek `prompt` field.
+
+    chat.deepseek.com stores history on the session. Sending the full system
+    prompt + transcript every time with parent_message_id=None REGENERATES
+    the first bubble (UI shows 2/2, 3/3, 4/4) and looks like abuse — live
+    accounts got suspended for this.
+
+    First turn of a session: instructions + current user text (once).
+    Later turns: only the new user/tool content after the last assistant.
+    """
+    last_user = ""
+    for m in messages or []:
+        if m.get("role") == "user":
+            last_user = _msg_text(m)
+    if not primed:
+        body = _system_prompt(system, tools)
+        if last_user:
+            body += "\n\n---\nUSER:\n" + last_user
+        return body
+    chunks: List[str] = []
+    for m in messages or []:
+        role = m.get("role")
+        if role == "system":
+            continue
+        if role == "assistant":
+            chunks = []          # only keep what comes AFTER last assistant
+            continue
+        if role == "tool":
+            chunks.append(f"TOOL RESULT ({m.get('name', 'tool')}): {_msg_text(m)[:4000]}")
+        elif role == "user":
+            chunks.append(_msg_text(m))
+    text = "\n\n".join(c for c in chunks if str(c).strip())
+    return text or last_user or "(continue)"
+
+
+def _msg_text(m: dict) -> str:
+    content = m.get("content") or ""
+    if isinstance(content, list):
+        content = "".join(c.get("text", "") for c in content if isinstance(c, dict))
+    return str(content)
+
+
+def extract_message_id(data: Any) -> Any:
+    """Last message_id seen in a DeepSeek completion SSE/JSON body."""
+    found: List[Any] = []
+
+    def walk(o: Any) -> None:
+        if isinstance(o, dict):
+            for k in ("message_id", "msg_id"):
+                if o.get(k) not in (None, ""):
+                    found.append(o[k])
+            p = o.get("p")
+            if p in ("response/message_id", "message_id") and o.get("v") not in (None, ""):
+                found.append(o["v"])
+            resp = o.get("response")
+            if isinstance(resp, dict) and resp.get("message_id") not in (None, ""):
+                found.append(resp["message_id"])
+            v = o.get("v")
+            if isinstance(v, (dict, list)):
+                walk(v)
+            elif isinstance(o.get("data"), (dict, list)):
+                walk(o["data"])
+        elif isinstance(o, list):
+            for x in o:
+                walk(x)
+
+    if isinstance(data, str):
+        s = data.strip()
+        if s.startswith("{") and "message_id" in s:
+            try:
+                walk(json.loads(s))
+            except Exception:
+                pass
+        for line in data.splitlines():
+            line = line.strip()
+            if not line.startswith("data:"):
+                continue
+            js = line[5:].strip()
+            if js == "[DONE]":
+                break
+            try:
+                walk(json.loads(js))
+            except Exception:
+                continue
+    else:
+        walk(data)
+    return found[-1] if found else None
+
+
 def _serialize(messages: List[dict]) -> str:
     """Flatten OpenAI-style messages into a single text prompt for DeepSeek."""
     out: List[str] = []
@@ -712,12 +803,14 @@ class DeepSeekProvider(BaseProvider):
     def reset_session(self) -> None:
         """Start a fresh DeepSeek chat thread on the next completion.
 
-        Each user goal gets its own chat.deepseek.com session so the account
-        sidebar does not become one giant mixed transcript. Sessions we create
-        are tracked and can be deleted with delete_session / /forget-chats.
+        Used by `/new` only. Follow-up goals in the same REPL MUST stay on
+        this session with parent_message_id set — a new chat (or parent=None)
+        regenerates the first bubble (UI 2/2, 3/3, 4/4) and gets accounts
+        suspended.
         """
         self._session = None
         self._parent_id = None
+        self._primed = False
 
     def current_session(self) -> Optional[str]:
         return self._session
@@ -868,7 +961,7 @@ class DeepSeekProvider(BaseProvider):
         for m in messages:
             if m.get("role") == "system":
                 system = str(m.get("content") or "")
-        prompt = _system_prompt(system, tools) + "\n\n## Conversation\n" + _serialize(messages)
+        prompt = turn_prompt(self._primed, system, tools, messages)
         if not self._session:
             try:
                 sess = self._request("/chat_session/create", {"character_id": None})
@@ -877,6 +970,9 @@ class DeepSeekProvider(BaseProvider):
                 self._session = bd.get("id") or (bd.get("chat_session") or {}).get("id")
                 if self._session and self._session not in self._created_sessions:
                     self._created_sessions.append(self._session)
+                self._parent_id = None
+                self._primed = False
+                prompt = turn_prompt(False, system, tools, messages)
             except Exception:
                 self._session = None
 
@@ -894,7 +990,7 @@ class DeepSeekProvider(BaseProvider):
 
         payload = {
             "chat_session_id": self._session,
-            "parent_message_id": None,
+            "parent_message_id": self._parent_id,
             "prompt": prompt,
             "stream": True,
             "ref_file_ids": file_ids,
@@ -908,6 +1004,17 @@ class DeepSeekProvider(BaseProvider):
         if mute:
             raise ProviderError(mute, retryable=False)
         text, think = self._collect(data)
+        self._primed = True
+        mid = extract_message_id(data)
+        if mid is not None:
+            self._parent_id = mid
+        elif self._parent_id is None:
+            self._parent_id = 1
+        else:
+            try:
+                self._parent_id = int(self._parent_id) + 1
+            except Exception:
+                pass
         # V4 expert/thinking often emits DSML inside the THINK stream, not RESPONSE.
         blob = text or ""
         if think and (looks_like_dsml(think) or "TOOL_CALL" in think

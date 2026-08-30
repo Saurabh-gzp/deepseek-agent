@@ -494,13 +494,8 @@ class DeepSeekApp:
                     pass
         mode_label = self._deepseek.get_mode_label() if self._deepseek else "?"
         self.ui.phase("DEEPSEEK-AGENT", f"{mode_label} mode · autonomous run")
-        # Fresh DeepSeek-account chat per goal so the sidebar stays one-thread-per-task
-        # (deleting that session on chat.deepseek.com deletes this run's history).
-        if self._deepseek is not None:
-            try:
-                self._deepseek.reset_session()
-            except Exception:
-                pass
+        # Stay on the SAME chat.deepseek.com thread. New chats / parent=None
+        # regenerations are what got accounts suspended. `/new` starts a thread.
         agent = DeepSeekSoloAgent(self.ctx)
         context = self._focused_context()
         steps_budget = int(self.config.get("autonomy.max_steps_per_agent", 16))
@@ -1080,6 +1075,13 @@ class DeepSeekApp:
             self.ui.event("warn", "deepseek engine not active")
             return
         self._deepseek_setup(force=True)
+
+    def cmd_new(self, _: str = "") -> None:
+        """Explicit new DeepSeek thread — do NOT call this on every goal."""
+        if self._deepseek is not None:
+            self._deepseek.reset_session()
+        self._conversation = []
+        self.ui.event("ok", "new DeepSeek chat thread (next message starts a fresh sidebar chat)")
 
     def cmd_chats(self, _: str = "") -> None:
         """List chat.deepseek.com sessions stored on the logged-in account."""
