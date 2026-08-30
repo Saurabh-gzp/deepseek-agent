@@ -129,6 +129,10 @@ class RAGEngine:
         if not self.enabled or self.store.count() == 0:
             return []
         k = top_k or self.top_k
+        # DeepSeek has no embeddings — keyword search is the normal path,
+        # not a per-query "Vector search failed" scare (live: showed on "hy").
+        if not self._embeddings_ok:
+            return self.store.keyword_search(query, k)
         try:
             qe = self.llm.embed([query])[0]
             docs = self.store.search(qe, k, collection, query_text=query, min_score=self.min_score)
