@@ -17,7 +17,7 @@ UPDATE_MODE=0
 [ "${1:-}" = "--update" ] && UPDATE_MODE=1
 
 printf "\n${BOLD}╔══════════════════════════════════════════╗
-║   N E X U S   A G E N T   —   s e t u p   ║
+║  D E E P S E E K   A G E N T   —  s e t u p  ║
 ╚══════════════════════════════════════════╝${R}\n"
 
 # ── 1. Python check ────────────────────────────────────────────

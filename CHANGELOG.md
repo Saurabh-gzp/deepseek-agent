@@ -3,18 +3,18 @@
 All notable changes to **DeepSeek-Agent**.
 
 > This project is now **DeepSeek-native** (runs entirely on `chat.deepseek.com`,
-> email+password login, native instant/expert/vision modes). Earlier Mistral-era
+> email+password login, native instant/expert/vision modes). Earlier API-key-era
 > history was folded into the v2.0.0 rebrand below.
 
 ---
 
-## [2.0.0] — DeepSeek-native rebrand, Mistral removed, E2E hardening
+## [2.0.0] — DeepSeek-native rebrand, legacy provider removed, E2E hardening
 
 **Rebrand / structure**
 - Package is `deepseek_agent`, launcher `deepseek.py`, installed command `deepseek`,
   data dir `.deepseek`, env vars `DEEPSEEK_*`. Agent name is **DeepSeek-Agent**.
-- **Mistral provider removed entirely** — code, config, README, docs, tests. The
-  registry is DeepSeek-only (`deepseek` + optional `openai_compatible`).
+- **Legacy third-party provider removed entirely** — code, config, README, docs,
+  tests. The registry is DeepSeek-only (`deepseek` + optional `openai_compatible`).
 - New complete README; `TERMUX.md`, `DeepSeek-AGENT.md`, `ARCHITECTURE.md` updated.
 
 **Provider (DeepSeek via `requests` + Android UA)**
@@ -57,4 +57,4 @@ the provider (tracked separately).
 The full autonomy engine (router/supervisor/worker/coder/researcher/critic,
 tools, RAG, memory, skills, safety, approvals, hosting verification, live TUI
 audits) was developed through 1.x. With v2.0.0 the backend is DeepSeek-native and
-the Mistral-era specifics no longer apply.
+the legacy provider specifics no longer apply.
