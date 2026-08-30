@@ -673,10 +673,35 @@ class ShellTools:
         except Exception as e:  # noqa: BLE001
             return ToolResult(False, error=f"server up on :{port} but fetch failed: {e}")
 
-        if marker and marker not in body:
+        # A "site" must be CONTENT-VERIFIED, not just any HTTP 200. A directory
+        # listing (http.server auto-index when there's no index.html at the
+        # served root) must NOT count as a hosted site — otherwise the agent
+        # "verifies" the wrong folder and claims a marker it never saw (live).
+        _DIR_LISTING = ("directory listing for" in body.lower()
+                        or "<h1>directory listing" in body.lower())
+        verified_marker = ""
+        if marker and marker in body:
+            verified_marker = marker
+        elif marker and marker not in body:
             return ToolResult(False, error=(
                 f"server up on :{port} but marker {marker!r} NOT found in "
                 f"{path} (content mismatch) — first 200 chars: {body[:200]!r}"))
+        elif _DIR_LISTING:
+            return ToolResult(False, error=(
+                f"server up on :{port} but {path} returns a DIRECTORY LISTING, "
+                f"not a site — host the project FOLDER containing index.html "
+                f"(pass --directory projects/<slug>), not the workspace root, "
+                f"and give a marker= of the exact <title> text."))
+        else:
+            # no explicit marker: auto-verify from the served <title>
+            tm = re.search(r"<title>\s*([^<]{2,80}?)\s*</title>", body, re.I | re.S)
+            if tm and tm.group(1).strip():
+                verified_marker = tm.group(1).strip()
+            else:
+                return ToolResult(False, error=(
+                    f"server up on :{port} but no content marker/<title> found at "
+                    f"{path} — pass marker= with the exact <title> text to verify."))
+
         self._remember_server(port, proc.pid)
         # v1.10.4 BUG-2 FIX: the served directory was never part of this
         # string, so engine.py's "does the hosting evidence match THIS
@@ -690,13 +715,13 @@ class ShellTools:
         out = (f"Server RUNNING (pid {proc.pid}) at http://127.0.0.1:{port}{path}"
                + (f"\nname: {name}" if name else "")
                + f"\nserving: {served_rel} (directory={drel})"
-               + f"\nverified: HTTP 200, {len(body)} bytes fetched"
-               + (f", marker {marker!r} found" if marker else "")
+               + f"\nverified: HTTP 200, {len(body)} bytes fetched, marker "
+               + f"{verified_marker!r} found"
                + "\nThe server stays up — stop it later with stop_server(port="
                + str(port) + ").")
         return ToolResult(True, output=out,
                           data={"pid": proc.pid, "port": port, "url": url,
-                                "serving": served_rel})
+                                "serving": served_rel, "marker": verified_marker})
 
     # ------------------------------------------------------------------
     _SERVER_REG = ".deepseek/servers.json"
