@@ -519,7 +519,7 @@ class ShellTools:
 
     def start_server(self, command: str = "", port: int = 8000, path: str = "/",
                      marker: str = "", name: str = "", wait: int = 6,
-                     **kwargs) -> ToolResult:
+                     directory: str = "", **kwargs) -> ToolResult:
         # LLMs sometimes pass fuzzy params (timeout=, wait_seconds=, cwd=...) —
         # tolerate and map them instead of erroring the whole tool call.
         directory = ""
@@ -537,7 +537,7 @@ class ShellTools:
                     pass
             if "url_path" in kwargs:
                 path = kwargs["url_path"]
-            directory = str(kwargs.get("directory") or kwargs.get("dir")
+            directory = str(directory or kwargs.get("directory") or kwargs.get("dir")
                             or kwargs.get("cwd") or "")
         # Live Termux: start_server(path='projects/foo') glued onto the port
         # as `http.server 8000projects`. Treat a non-URL `path` as a folder.
@@ -949,7 +949,9 @@ class ShellTools:
                 "foreground run_shell for anything meant to stay up (http.server, flask, "
                 "node, vite build --host).",
                 {"type": "object", "properties": {
-                    "command": {"type": "string"}, "port": {"type": "integer"},
+                    "command": {"type": "string"},
+                    "directory": {"type": "string"},
+                    "port": {"type": "integer"},
                     "path": {"type": "string"}, "marker": {"type": "string"},
                     "name": {"type": "string"}, "wait": {"type": "integer"}},
                  "required": []},

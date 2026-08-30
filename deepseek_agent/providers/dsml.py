@@ -64,51 +64,71 @@ def _auto_type(val: str) -> Any:
         return s
 
 
+def _set_arg(args: Dict[str, Any], key: str, raw: str) -> None:
+    key = (key or "").strip()
+    if not key:
+        return
+    raw = _cdata(raw)
+    try:
+        val: Any = json.loads(raw)
+    except Exception:
+        val = _auto_type(raw)
+    # Prefer a longer/non-empty value if the same key appears twice.
+    prev = args.get(key)
+    if prev in (None, "") or (isinstance(val, str) and isinstance(prev, str)
+                              and len(val) > len(prev)):
+        args[key] = val
+
+
 def _parse_params(inner: str) -> Dict[str, Any]:
+    """Merge DSML closed + unclosed + Claude <parameter> forms.
+
+    Live: path arrived as DSML and content as Claude-style
+    `<parameter name="content">` — returning early after the first form
+    dropped the HTML body, so write_file was extracted with empty content.
+    """
     args: Dict[str, Any] = {}
-    # Closed tags first.
     param_re = re.compile(
         r'<\|DSML\|parameter\s+name="([^"]+)"([^>]*)>(.*?)</\|DSML\|parameter>',
         re.DOTALL | re.I,
     )
-    used = False
-    for m in param_re.finditer(inner):
-        used = True
-        key = m.group(1).strip()
-        raw = _cdata(m.group(3))
-        try:
-            val: Any = json.loads(raw)
-        except Exception:
-            val = _auto_type(raw)
-        args[key] = val
-    if used:
-        return args
-    # Attribute / unclosed form:
-    #   <|DSML|parameter name="path" string="true">index.html
-    #   (value runs until the next DSML tag)
+    for m in param_re.finditer(inner or ""):
+        _set_arg(args, m.group(1), m.group(3))
     loose = re.compile(
         r'<\|DSML\|parameter\s+name="([^"]+)"[^>]*>(.*?)(?=<\|DSML\||</\|DSML\||\Z)',
         re.DOTALL | re.I,
     )
-    for m in loose.finditer(inner):
+    for m in loose.finditer(inner or ""):
         key = m.group(1).strip()
-        raw = _cdata(m.group(2))
-        try:
-            val = json.loads(raw)
-        except Exception:
-            val = _auto_type(raw)
-        args[key] = val
-    # Claude-style <parameter name="x">val</parameter>
-    if not args:
-        for m in re.finditer(
-            r'<parameter\s+name="([^"]+)">(.*?)</parameter>', inner, re.DOTALL | re.I
-        ):
-            raw = _cdata(m.group(2))
-            try:
-                val = json.loads(raw)
-            except Exception:
-                val = _auto_type(raw)
-            args[m.group(1).strip()] = val
+        if key in args and str(args.get(key) or "").strip():
+            continue
+        _set_arg(args, key, m.group(2))
+    for m in re.finditer(
+        r'<parameter\s+name="([^"]+)">(.*?)</parameter>', inner or "", re.DOTALL | re.I
+    ):
+        key = m.group(1).strip()
+        if key in args and str(args.get(key) or "").strip():
+            continue
+        _set_arg(args, key, m.group(2))
+    return args
+
+
+def _salvage_write_body(name: str, body: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    """If write_file/edit_file has a path but no content, keep leftover HTML."""
+    if name not in ("write_file", "edit_file"):
+        return args
+    if str(args.get("content") or args.get("new_text") or "").strip():
+        return args
+    leftover = re.sub(
+        r"<\|DSML\|parameter\b.*?(?:</\|DSML\|parameter>|(?=<\|DSML\|parameter)|\Z)",
+        "", body or "", flags=re.DOTALL | re.I)
+    leftover = re.sub(r"<parameter\b.*?</parameter>", "", leftover,
+                      flags=re.DOTALL | re.I)
+    leftover = leftover.strip()
+    if leftover.startswith("<![CDATA[") and leftover.endswith("]]>"):
+        leftover = leftover[9:-3]
+    if len(leftover) >= 40:
+        args["content"] = leftover
     return args
 
 
@@ -148,7 +168,7 @@ def extract_dsml_calls(text: str) -> List[dict]:
         name = (m.group(1) or "").strip()
         body = m.group(2) or ""
         if name:
-            calls.append(_call(name, _parse_params(body)))
+            calls.append(_call(name, _salvage_write_body(name, body, _parse_params(body))))
     if calls:
         return calls
     # Bare <invoke name="x"> (no DSML prefix) — already handled upstream too.
@@ -157,7 +177,8 @@ def extract_dsml_calls(text: str) -> List[dict]:
     ):
         name = m.group(1).strip()
         if name:
-            calls.append(_call(name, _parse_params(m.group(2))))
+            calls.append(_call(name, _salvage_write_body(name, m.group(2),
+                                                         _parse_params(m.group(2)))))
     return calls
 
 
@@ -248,11 +269,13 @@ def build_dsml_tool_prompt(tools: List[dict]) -> str:
         "You have tools. When you need one, emit ONLY a DSML block "
         "(no markdown fences, no prose around it):\n\n"
         "<|DSML|tool_calls>\n"
-        "  <|DSML|invoke name=\"TOOL_NAME\">\n"
-        "    <|DSML|parameter name=\"ARG\"><![CDATA[VALUE]]></|DSML|parameter>\n"
+        "  <|DSML|invoke name=\"write_file\">\n"
+        "    <|DSML|parameter name=\"path\"><![CDATA[portfolio/css/style.css]]></|DSML|parameter>\n"
+        "    <|DSML|parameter name=\"content\"><![CDATA[:root{--color-primary:#111}]]></|DSML|parameter>\n"
         "  </|DSML|invoke>\n"
         "</|DSML|tool_calls>\n\n"
-        "Also accepted: TOOL_CALL: {\"name\":\"TOOL_NAME\",\"arguments\":{...}}\n"
+        "Also accepted: TOOL_CALL: {\"name\":\"write_file\",\"arguments\":{\"path\":\"f.css\",\"content\":\"...\"}}\n"
+        "NEVER emit name=\"TOOL_NAME\" — that is a placeholder. Use a real tool from the list.\n"
         "Fill every REQUIRED argument with a real value. After the tool result "
         "arrives, continue. When the task is actually done, reply in plain text "
         "with NO tool block.\n"

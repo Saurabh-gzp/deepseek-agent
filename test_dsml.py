@@ -111,6 +111,34 @@ class DsmlParse(unittest.TestCase):
         self.assertEqual(_extract_tool_calls("Hello, I am DeepSeek-Agent."), [])
         self.assertFalse(looks_like_dsml("just thinking about files"))
 
+
+    def test_mixed_dsml_path_claude_content(self):
+        """Live: path was DSML, HTML body was Claude <parameter> — content dropped."""
+        html = "<!DOCTYPE html><html><body><h1>Portfolio</h1></body></html>"
+        text = (
+            '<|DSML|invoke name="write_file">\n'
+            '<|DSML|parameter name="path"><![CDATA[portfolio/index.html]]>'
+            '</|DSML|parameter>\n'
+            f'<parameter name="content">{html}</parameter>\n'
+            '</|DSML|invoke>'
+        )
+        calls = extract_dsml_calls(text)
+        self.assertEqual(_names(calls), ["write_file"])
+        self.assertEqual(_args(calls[0])["path"], "portfolio/index.html")
+        self.assertIn("<h1>Portfolio</h1>", _args(calls[0])["content"])
+
+    def test_salvage_unclosed_html_body(self):
+        html = "<!DOCTYPE html>\n<html><head><title>X</title></head><body>hi</body></html>"
+        text = (
+            '<|DSML|invoke name="write_file">\n'
+            '<|DSML|parameter name="path"><![CDATA[portfolio/index.html]]>'
+            '</|DSML|parameter>\n'
+            + html
+        )
+        calls = extract_dsml_calls(text)
+        self.assertEqual(_args(calls[0])["path"], "portfolio/index.html")
+        self.assertIn("<title>X</title>", _args(calls[0])["content"])
+
     def test_live_dropped_opening_pipe(self):
         """V4 live: <DSML|invoke without the leading |, empty close tags mixed."""
         text = (
@@ -140,11 +168,20 @@ class MuteDetect(unittest.TestCase):
 
 class FabricationGuard(unittest.TestCase):
     def test_action_regex_hits_build_host(self):
-        from deepseek_agent.agents.base import _ACTION_TASK, _FAKE_CLAIM, _HOST_TASK
+        from deepseek_agent.agents.base import _ACTION_TASK, _FAKE_CLAIM, _HOST_TASK, _WIP_FINAL
         self.assertTrue(_ACTION_TASK.search("banao ek portfolio website"))
         self.assertTrue(_HOST_TASK.search("host it locally on localhost"))
         self.assertTrue(_FAKE_CLAIM.search("I have built and hosted it. HTTP 200 at localhost:8080"))
         self.assertFalse(_FAKE_CLAIM.search("I will start by listing the workspace."))
+        self.assertTrue(_WIP_FINAL.search(
+            "The HTML file was created successfully. Let me create the CSS now."))
+
+    def test_hinglish_host_kr_dena_is_hosting_intent(self):
+        from deepseek_agent.orchestrator.engine import _is_hosting_intent
+        g = ("make a best portfolio website for yourself  and host kr dena "
+             "locally best ui ke sath bnana")
+        self.assertTrue(_is_hosting_intent(g))
+        self.assertFalse(_is_hosting_intent("what is a web host"))
 
 
 if __name__ == "__main__":

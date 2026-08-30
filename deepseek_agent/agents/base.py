@@ -34,6 +34,12 @@ _FAKE_CLAIM = re.compile(
     r"verified with HTTP|server (is )?running|site is (live|up))", re.I)
 _WRITE_TOOLS = {"write_file", "edit_file", "start_server", "delete_path",
                 "run_shell", "run_python", "make_pptx", "make_pdf", "make_docx"}
+_WIP_FINAL = re.compile(
+    r"\b(let me (now )?(create|write|build|add|host)|"
+    r"I('ll| will) (now )?(create|write|build|add|host)|"
+    r"need to (put|create|write|add|host)|"
+    r"CSS now|stylesheet now|next I will|I need to (create|write|put))\b",
+    re.I)
 
 
 @dataclass
@@ -185,6 +191,7 @@ class BaseAgent:
         consec_fail = 0          # v1.6: brake on repeated tool failures (token fires)
         fail_flagged = False
         fake_nudges = 0          # reject fabricated "I hosted it" finals
+        malformed_nudges = 0     # DSML markup — separate from honesty budget
 
         for i in range(budget):
             # user pressed Ctrl+C → stop this agent cleanly at the next step
@@ -229,21 +236,21 @@ class BaseAgent:
                 if not isinstance(args, dict):
                     args = {}
                 if name in ("write_file", "edit_file"):
-                    if not str(args.get("path") or "").strip() or not str(
-                            args.get("content") or args.get("new_text") or "").strip():
-                        continue
-                if name == "run_shell" and not str(args.get("command") or "").strip():
-                    continue
-                if name == "run_python" and not str(args.get("code") or "").strip():
-                    continue
+                    if not str(args.get("path") or "").strip():
+                        args["_empty"] = "path"
+                    elif not str(args.get("content") or args.get("new_text") or "").strip():
+                        args["_empty"] = "content"
+                elif name == "run_shell" and not str(args.get("command") or "").strip():
+                    args["_empty"] = "command"
+                elif name == "run_python" and not str(args.get("code") or "").strip():
+                    args["_empty"] = "code"
+                elif name == "start_server" and not (
+                        str(args.get("directory") or args.get("command") or
+                            args.get("path") or "").strip()):
+                    args["_empty"] = "directory"
+                call.setdefault("function", {})["arguments"] = json.dumps(args)
                 usable.append(call)
-            if res.tool_calls and not usable:
-                # Model emitted a tool-shaped blob with empty args — nudge, don't finalize.
-                res.tool_calls = []
-                extra = ((res.content or "") + "\nEMPTY_TOOL_CALL").strip()
-                res.content = extra
-            else:
-                res.tool_calls = usable
+            res.tool_calls = usable
 
             if not res.tool_calls:
                 answer = (res.content or "").strip()
@@ -324,9 +331,17 @@ class BaseAgent:
                 step = AgentStep(i, "tool", tool=name, args=args)
 
                 approved = self.ctx.approve(name, args, self.agent_name)
-                if not approved:
+                if args.get("_empty"):
+                    need = args.get("_empty")
+                    out = ToolResult(False, error=(
+                        f"{name} is missing required argument '{need}'. "
+                        "Fill every required field. For write_file: path AND "
+                        "content (write CSS first if HTML is too large). "
+                        "For start_server: directory= the folder that has index.html."))
+                elif not approved:
                     out = ToolResult(False, error="Action denied by user policy.")
                 else:
+                    args.pop("_empty", None)
                     out = self.tools.execute(name, args, self.agent_name)
                 step.ok = out.ok
                 step.content = out.as_text(1500)

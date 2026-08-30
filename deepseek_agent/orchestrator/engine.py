@@ -179,7 +179,15 @@ def _is_hosting_intent(text: str) -> bool:
     if _QUICK_BLOCK.search(text):
         return True
     bare = _re.search(r"(?:localhost|127\.0\.0\.1):\d+", text)
-    return bool(bare and _SERVE_VERB.search(text))
+    if bare and _SERVE_VERB.search(text):
+        return True
+    # Hinglish: "host kr dena locally" / "locally host karo" — live portfolio
+    # run skipped the parachute because host was not adjacent to 'website'.
+    if _SERVE_VERB.search(text) and _re.search(
+            r"\b(local(?:ly)?|localhost|website|site|page|portfolio|index\.html)\b",
+            text, _re.I):
+        return True
+    return False
 # v1.8.3: explicit hosting spec the supervisor writes into host-task descriptions
 _START_SERVER_SPEC = _re.compile(
     r"start_server\(\s*command\s*=\s*['\"]([^'\"]+)['\"][^)]*?port\s*=\s*(\d+)"
