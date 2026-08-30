@@ -134,6 +134,15 @@ class DeepSeekAccount:
         except Exception as e:
             self.notify("warn", f"could not save token: {e}")
 
+    def clear_token(self) -> None:
+        """Drop the cached bearer so the next login uses current email/password."""
+        self._token = None
+        try:
+            if self.token_file.exists():
+                self.token_file.unlink()
+        except Exception:
+            pass
+
     def load_cached_token(self) -> Optional[str]:
         if self._token:
             return self._token

@@ -155,13 +155,13 @@ class DeepSeekApp:
                       "  The token is stored on this device only (chmod 600) and is\n"
                       "  auto-refreshed when it expires.\n"
                       "  [muted]Tip: the password is shown as you type (not hidden).[/]")
-        # Reuse already-saved credentials (email+password) if present, so we
-        # don't re-ask every launch — only prompt when there is none stored yet.
         acct = prov.account.load_account()
-        if acct:
-            self.ui.event("ok", "using saved DeepSeek credentials")
-            email, password = acct["email"], acct["password"]
-        else:
+        # /login (force=True) MUST ask again — reusing a saved/suspended account
+        # is why "login OK" happened while chat stayed muted.
+        if force or not acct:
+            if acct:
+                self.ui.print(f"  [muted]currently saved: {acct.get('email','')} "
+                              f"(type a NEW email to switch accounts)[/]")
             try:
                 email = self.ui.ask("DeepSeek email / ID").strip()
                 password = self.ui.ask("DeepSeek password").strip()   # visible, not secret
@@ -171,6 +171,15 @@ class DeepSeekApp:
                 self.ui.event("warn", "email and password both required — setup skipped")
                 return
             prov.account.save_account(email, password)
+            prov.account.clear_token()
+            prov._token = None
+            try:
+                prov.reset_session()
+            except Exception:
+                pass
+        else:
+            self.ui.event("ok", f"using saved DeepSeek credentials ({acct['email']})")
+            email, password = acct["email"], acct["password"]
         self._deepseek.set_paste_callback(self._paste_token)
         tok = None
         try:
@@ -196,7 +205,13 @@ class DeepSeekApp:
                 tok = None
         if tok:
             prov._token = tok
-            self.ui.event("ok", f"DeepSeek login OK ✓ — token saved "
+            who = ""
+            try:
+                saved = prov.account.load_account() or {}
+                who = f" as {saved.get('email','')}" if saved.get("email") else ""
+            except Exception:
+                who = ""
+            self.ui.event("ok", f"DeepSeek login OK ✓{who} — token saved "
                                 f"(mode: {prov.get_mode_label()})")
         else:
             self.ui.event("warn", "no token yet — use /login to add credentials or a token "
