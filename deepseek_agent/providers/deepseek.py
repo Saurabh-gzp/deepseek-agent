@@ -684,7 +684,12 @@ class DeepSeekProvider(BaseProvider):
         self._attach = cb
 
     def account_ok(self) -> bool:
+        """True when we have credentials OR a token on disk (for showing in UI)."""
         return self.account.load_account() is not None or bool(self.account.load_cached_token())
+
+    def has_token(self) -> bool:
+        """True only when an actual token file exists (a completed login)."""
+        return bool(self.account.load_cached_token())
 
     # ---- token ----------------------------------------------------------
     def _token_or_login(self, interactive: bool = True) -> str:

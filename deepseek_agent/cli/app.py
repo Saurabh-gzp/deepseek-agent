@@ -96,22 +96,29 @@ class DeepSeekApp:
             self.ui.event("warn", "deepseek engine not active")
             return
         prov = self._deepseek
-        if not force and prov.account_ok():
+        if not force and prov.has_token():
             return
         self.ui.rule("DEEPSEEK LOGIN 🔐")
         self.ui.print("  DeepSeek-Agent logs into chat.deepseek.com with your account.\n"
                       "  The token is stored on this device only (chmod 600) and is\n"
                       "  auto-refreshed when it expires.\n"
                       "  [muted]Tip: the password is shown as you type (not hidden).[/]")
-        try:
-            email = self.ui.ask("DeepSeek email / ID").strip()
-            password = self.ui.ask("DeepSeek password").strip()   # visible, not secret
-        except (KeyboardInterrupt, EOFError):
-            return
-        if not email or not password:
-            self.ui.event("warn", "email and password both required — setup skipped")
-            return
-        prov.account.save_account(email, password)
+        # Reuse already-saved credentials (email+password) if present, so we
+        # don't re-ask every launch — only prompt when there is none stored yet.
+        acct = prov.account.load_account()
+        if acct:
+            self.ui.event("ok", "using saved DeepSeek credentials")
+            email, password = acct["email"], acct["password"]
+        else:
+            try:
+                email = self.ui.ask("DeepSeek email / ID").strip()
+                password = self.ui.ask("DeepSeek password").strip()   # visible, not secret
+            except (KeyboardInterrupt, EOFError):
+                return
+            if not email or not password:
+                self.ui.event("warn", "email and password both required — setup skipped")
+                return
+            prov.account.save_account(email, password)
         self._deepseek.set_paste_callback(self._paste_token)
         tok = None
         try:
@@ -190,6 +197,19 @@ class DeepSeekApp:
         from ..core.keymanager import KeyManager
         marker = self.config.data_dir / "setup_done"
         try:
+            # DeepSeek engine: the wizard is email+password (not API keys).
+            # It must keep appearing until the user actually has a valid token,
+            # even if a previous (failed) run left the setup_done marker behind.
+            if self._deepseek is not None:
+                if not _sys.stdin.isatty():           # non-interactive/one-shot
+                    marker.parent.mkdir(parents=True, exist_ok=True)
+                    marker.write_text("skipped-non-tty")
+                    return
+                if not self._deepseek.has_token():
+                    self._deepseek_setup(force=True)
+                    marker.parent.mkdir(parents=True, exist_ok=True)
+                    marker.write_text("done")
+                return
             if marker.exists():
                 return
             if not _sys.stdin.isatty():               # non-interactive/one-shot
@@ -198,12 +218,6 @@ class DeepSeekApp:
                 return
             reg = self.ctx.llm.registry
             if reg.total_keys() > 0:
-                return
-            # DeepSeek engine: first-run is email+password (not API keys)
-            if reg.default_name == "deepseek":
-                marker.parent.mkdir(parents=True, exist_ok=True)
-                self._deepseek_setup(force=False)
-                marker.write_text("done")
                 return
         except Exception:
             return
@@ -401,10 +415,14 @@ class DeepSeekApp:
     def run_focused(self, task: str) -> None:
         """Run a single focused DeepSeek agent (DeepSeek-Agent default path)."""
         from ..agents.specialists import DeepSeekSoloAgent
-        if not self._deepseek_ok():
-            self.ui.event("warn", "DeepSeek login needed first. Add your DeepSeek account "
-                            "(email + password) — see first-run setup or /login.")
-            return
+        if self._deepseek is not None and not self._deepseek.has_token():
+            # No valid token yet -> prompt the login wizard, then retry once.
+            self.ui.event("warn", "DeepSeek login needed — no token yet.")
+            self._deepseek_setup(force=True)
+            if not self._deepseek.has_token():
+                self.ui.event("warn", "still no DeepSeek token — use /login to add one, "
+                                "or paste a token, then try again.")
+                return
         mode_label = self._deepseek.get_mode_label() if self._deepseek else "?"
         self.ui.phase("DEEPSEEK-AGENT", f"{mode_label} mode · autonomous run")
         agent = DeepSeekSoloAgent(self.ctx)
