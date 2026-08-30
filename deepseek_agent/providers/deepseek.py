@@ -582,6 +582,37 @@ def _extract_tool_calls(text: str) -> List[dict]:
     return calls
 
 
+def _mute_error(data: Any) -> str:
+    """DeepSeek returns JSON {biz_code:5, biz_msg:user is muted} instead of SSE."""
+    obj = None
+    if isinstance(data, dict):
+        obj = data
+    elif isinstance(data, str):
+        s = data.strip()
+        if s.startswith("{") and "muted" in s.lower():
+            try:
+                obj = json.loads(s)
+            except Exception:
+                return "DeepSeek account is muted (completion blocked)."
+        elif "user is muted" in s.lower():
+            return "DeepSeek account is muted (completion blocked)."
+    if not isinstance(obj, dict):
+        return ""
+    biz = obj.get("data") or {}
+    msg = str(biz.get("biz_msg") or obj.get("msg") or "")
+    code = biz.get("biz_code")
+    if code == 5 or "muted" in msg.lower():
+        until = (biz.get("biz_data") or {}).get("mute_until")
+        extra = ""
+        if until:
+            try:
+                extra = time.strftime(" until %Y-%m-%d %H:%M", time.localtime(float(until)))
+            except Exception:
+                extra = f" (until {until})"
+        return f"DeepSeek account is muted{extra}. Wait it out or use another account."
+    return ""
+
+
 def _system_prompt(system: str, tools: Optional[List[dict]]) -> str:
     parts = [system or "You are DeepSeek-Agent, an autonomous agent."]
     if tools:
@@ -873,6 +904,9 @@ class DeepSeekProvider(BaseProvider):
         }
         data = self._request("/chat/completion", payload,
                              pow_path="/api/v0/chat/completion", expect_json=False)
+        mute = _mute_error(data)
+        if mute:
+            raise ProviderError(mute, retryable=False)
         text, think = self._collect(data)
         # V4 expert/thinking often emits DSML inside the THINK stream, not RESPONSE.
         blob = text or ""

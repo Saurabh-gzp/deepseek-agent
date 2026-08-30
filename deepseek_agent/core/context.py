@@ -80,17 +80,18 @@ class AgentContext:
     def _register_meta_tools(self) -> None:
         S = {"type": "string"}
 
-        def load_skill(skill_id: str) -> ToolResult:
-            body = self.skills.load_body(skill_id, max_chars=4000)
-            if len(body) > 3500:
-                body = (body[:3500]
-                        + "\n\n[skill truncated] You have the checklist. "
-                          "NOW IMPLEMENT with write_file/edit_file/start_server. "
-                          "Do not recap the skill. Do not claim work without tool calls.")
+        def load_skill(skill_id: str, query: str = "") -> ToolResult:
+            task = (query or self.state.get("current_task") or "").strip()
+            body, tokens = self.skills.apply_for_task(
+                skill_id, task, persist_dir=self.config.workspace)
             if skill_id not in self.state["active_skills"]:
                 self.state["active_skills"].append(skill_id)
+            if tokens:
+                self.state["design_system"] = tokens
+                self.state["design_skill"] = skill_id
             if self.ui:
-                self.ui.event("skill", f"loaded skill: {skill_id}")
+                extra = " + design-system tokens" if tokens else ""
+                self.ui.event("skill", f"loaded skill: {skill_id}{extra}")
             return ToolResult(True, output=body)
 
         def list_skills(query: str = "") -> ToolResult:
@@ -165,8 +166,12 @@ class AgentContext:
                 return ToolResult(False, error=f"OCR failed: {e}")
 
         self.tools.add("load_skill",
-                       "Load the FULL playbook for a skill id from the catalog before specialised work.",
-                       {"type": "object", "properties": {"skill_id": S}, "required": ["skill_id"]},
+                       "Load a skill playbook. For UI/UX skills this ALSO runs the bundled "
+                       "design-system search and returns exact colour/font tokens you MUST "
+                       "copy into CSS. Pass query= if you want to override the task keywords.",
+                       {"type": "object",
+                        "properties": {"skill_id": S, "query": S},
+                        "required": ["skill_id"]},
                        load_skill, Risk.READ_ONLY)
         self.tools.add("list_skills", "List/search available skills.",
                        {"type": "object", "properties": {"query": S}}, list_skills, Risk.READ_ONLY)

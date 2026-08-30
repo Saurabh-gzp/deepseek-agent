@@ -19,14 +19,32 @@ import threading
 
 try:
     from playwright.sync_api import sync_playwright, Error as PWError
-    _PW_AVAILABLE = True
+    _PW_IMPORTED = True
 except Exception:                                            # noqa: BLE001
     sync_playwright = None
     PWError = Exception
-    _PW_AVAILABLE = False
+    _PW_IMPORTED = False
 
 _SETUP_HINT = ("playwright missing — run: pip install playwright && "
                "python3 -m playwright install chromium")
+_TERMUX_HINT = ("browser tools unavailable on this device (Playwright driver/node "
+                "not installed — typical on Termux). Use start_server + curl to "
+                "verify local pages. Do not retry browser_navigate.")
+
+
+def _driver_ok() -> bool:
+    if not _PW_IMPORTED:
+        return False
+    try:
+        import os
+        import playwright
+        node = os.path.join(os.path.dirname(playwright.__file__), "driver", "node")
+        return os.path.exists(node)
+    except Exception:
+        return False
+
+
+_PW_AVAILABLE = _driver_ok()
 
 _MAX_TEXT = 6000
 
@@ -40,8 +58,10 @@ class BrowserSession:
         self._page: Optional[object] = None
 
     def page(self):
-        if not _PW_AVAILABLE:
+        if not _PW_IMPORTED:
             raise RuntimeError(_SETUP_HINT)
+        if not _driver_ok():
+            raise RuntimeError(_TERMUX_HINT)
         if self._page is None:
             self._pw = sync_playwright().start()
             self._browser = self._pw.chromium.launch(
@@ -327,7 +347,7 @@ class BrowserTools:
         B = {"type": "boolean"}
         N = {"type": "number"}
         if not _PW_AVAILABLE:
-            return
+            return  # Termux / missing driver: do not even offer browser_* tools
         common = ["supervisor", "coder", "worker", "solo"]
         reg.add("browser_navigate",
                 "Open a URL in the REAL headless Chromium (handles JS SPAs, renders "

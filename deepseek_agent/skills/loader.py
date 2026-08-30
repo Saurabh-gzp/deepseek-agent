@@ -11,10 +11,13 @@ Directory layout (user-defined, nested allowed):
 """
 from __future__ import annotations
 
+import json
 import re
+import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     import yaml
@@ -193,6 +196,163 @@ class SkillLibrary:
         if refs:
             head += f"_Reference files available (use read_file): {', '.join(refs)}_\n\n"
         return head + body[:cap]
+
+    def apply_for_task(self, skill_id: str, task: str = "",
+                       persist_dir: Optional[Path] = None):
+        """Load a skill AND execute its bundled design-system script when present.
+
+        Live bug: dumping 16k of ui_ux_pro_max.md then truncating to 3500 chars
+        cut off the mandatory `search.py --design-system` workflow. The model
+        then invented a generic purple/glassmorphism theme. We run the script
+        ourselves and return concrete tokens the CSS MUST use.
+        """
+        s = self.get(skill_id)
+        if not s:
+            return self.load_body(skill_id), None
+        sdir = s.path.parent.resolve()
+        search_py = sdir / "scripts" / "search.py"
+        if search_py.exists():
+            tokens, ds_block = self._run_design_system(search_py, task, persist_dir)
+            playbook = self._compact_playbook(s, sdir)
+            return playbook + ("\n\n" + ds_block if ds_block else ""), tokens
+        return self.load_body(skill_id, max_chars=8000), None
+
+    @staticmethod
+    def _task_query(task: str) -> str:
+        stop = {
+            "the", "and", "for", "yourself", "myself", "with", "best", "make",
+            "a", "an", "kr", "dena", "ke", "sath", "bnana", "banao", "bana",
+            "host", "locally", "please", "karo", "kardo", "do", "me", "my",
+            "your", "our", "this", "that", "then", "also",
+        }
+        words = [w for w in re.findall(r"[A-Za-z]{3,}", task or "")
+                 if w.lower() not in stop]
+        return " ".join(words[:8]) or "modern product website"
+
+    def _run_design_system(self, search_py: Path, task: str,
+                           persist_dir: Optional[Path]):
+        query = self._task_query(task)
+        name = "Site"
+        m = re.search(r"\b(portfolio|dashboard|landing|saas|agency|studio)\b",
+                      task or "", re.I)
+        if m:
+            name = m.group(1).title()
+        cmd = [sys.executable, str(search_py), query, "--design-system", "--json",
+               "-p", name]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=25,
+                                  cwd=str(search_py.parent))
+        except Exception as e:  # noqa: BLE001
+            return None, f"(design-system script failed to launch: {e})"
+        raw = (proc.stdout or "").strip()
+        tokens = None
+        if raw:
+            try:
+                payload = json.loads(raw)
+                tokens = payload.get("design_system") or payload
+            except Exception:
+                tokens = None
+        if not tokens:
+            ascii_cmd = [sys.executable, str(search_py), query, "--design-system",
+                         "-p", name]
+            try:
+                proc2 = subprocess.run(ascii_cmd, capture_output=True, text=True,
+                                       timeout=25, cwd=str(search_py.parent))
+                txt = (proc2.stdout or "")[:4000]
+            except Exception:
+                txt = (proc.stderr or raw or "no output")[:1500]
+            return None, (
+                f"## DESIGN SYSTEM (script output for query {query!r})\n"
+                f"Use the colours/fonts below. Do NOT invent a purple template.\n\n"
+                f"```\n{txt}\n```")
+        if persist_dir:
+            try:
+                persist_dir = Path(persist_dir)
+                persist_dir.mkdir(parents=True, exist_ok=True)
+                md = self._tokens_to_md(tokens, query)
+                (persist_dir / "DESIGN.md").write_text(md, encoding="utf-8")
+            except Exception:
+                pass
+        return tokens, self._tokens_to_md(tokens, query)
+
+    @staticmethod
+    def _tokens_to_md(tokens: dict, query: str) -> str:
+        colors = tokens.get("colors") or {}
+        typo = tokens.get("typography") or {}
+        style = tokens.get("style") or {}
+        pattern = tokens.get("pattern") or {}
+        lines = [
+            "## DESIGN TOKENS — MANDATORY (already generated for this task)",
+            f"_query: {query}_",
+            "",
+            "Copy these EXACT values into `:root` of your CSS. A generic purple/",
+            "indigo/glassmorphism template that ignores these hex codes is a FAIL.",
+            "",
+            f"**Style:** {style.get('name') or '?'}",
+            f"**Pattern:** {pattern.get('name') or '?'}",
+            f"**Effects:** {tokens.get('key_effects') or style.get('effects') or ''}",
+            f"**Avoid:** {tokens.get('anti_patterns') or ''}",
+            "",
+            "```css",
+            ":root {",
+        ]
+        cmap = [
+            ("primary", "--color-primary"),
+            ("on_primary", "--color-on-primary"),
+            ("secondary", "--color-secondary"),
+            ("accent", "--color-accent"),
+            ("cta", "--color-accent"),
+            ("background", "--color-background"),
+            ("foreground", "--color-foreground"),
+            ("card", "--color-card"),
+            ("muted", "--color-muted"),
+            ("muted_foreground", "--color-muted-foreground"),
+            ("border", "--color-border"),
+        ]
+        seen = set()
+        for key, var in cmap:
+            val = colors.get(key)
+            if val and var not in seen:
+                lines.append(f"  {var}: {val};")
+                seen.add(var)
+        heading = typo.get("heading") or ""
+        body = typo.get("body") or heading
+        if heading:
+            lines.append(f'  --font-heading: "{heading}", system-ui, sans-serif;')
+        if body:
+            lines.append(f'  --font-body: "{body}", system-ui, sans-serif;')
+        lines.append("}")
+        gfont = typo.get("css_import") or typo.get("google_fonts_url") or ""
+        if gfont:
+            if gfont.startswith("@import"):
+                lines.append(gfont if gfont.endswith(";") else gfont + ";")
+            else:
+                lines.append(f"@import url('{gfont}');")
+        lines.append("```")
+        lines += [
+            "",
+            f"**Fonts:** heading `{heading}` / body `{body}`",
+            f"**Mood:** {typo.get('mood') or ''}",
+            "",
+            "Pre-delivery: SVG icons (no emoji-as-icon), 44×44 touch targets, "
+            "visible :focus-visible, prefers-reduced-motion, hover 150-300ms, "
+            "responsive 375/768/1024. Put the CSS variables in the stylesheet "
+            "BEFORE writing hero copy.",
+        ]
+        return "\n".join(lines)
+
+    @staticmethod
+    def _compact_playbook(skill: Skill, sdir: Path) -> str:
+        return (
+            f"# SKILL: {skill.name} ({skill.id})\n"
+            f"_Skill directory: `{sdir}`_\n\n"
+            "This skill was EXECUTED for you (design-system search already ran).\n"
+            "Do NOT recap the skill. Do NOT invent a palette. IMPLEMENT with "
+            "write_file using the DESIGN TOKENS below.\n\n"
+            "If you need extra guidance later:\n"
+            f"  python3 {sdir}/scripts/search.py \"<query>\" --domain ux\n"
+            f"  read_file {sdir}/references/pro-rules.md\n"
+        )
 
     def _refs(self, skill: Skill) -> List[str]:
         d = skill.path.parent / f"{skill.path.stem}_refs"

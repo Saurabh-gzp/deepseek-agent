@@ -128,6 +128,16 @@ class DsmlParse(unittest.TestCase):
         self.assertEqual(_args(calls[0])["path"], "projects/e2e-arena/index.html")
 
 
+class MuteDetect(unittest.TestCase):
+    def test_muted_json(self):
+        from deepseek_agent.providers.deepseek import _mute_error
+        raw = '{"code":0,"data":{"biz_code":5,"biz_msg":"user is muted","biz_data":{"mute_until":1788185755}}}'
+        msg = _mute_error(raw)
+        self.assertIn("muted", msg.lower())
+        self.assertIn("2026", msg)
+        self.assertEqual(_mute_error("data: hello"), "")
+
+
 class FabricationGuard(unittest.TestCase):
     def test_action_regex_hits_build_host(self):
         from deepseek_agent.agents.base import _ACTION_TASK, _FAKE_CLAIM, _HOST_TASK

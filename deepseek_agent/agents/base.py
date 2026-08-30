@@ -167,6 +167,10 @@ class BaseAgent:
             on_step: Optional[Callable[[AgentStep], None]] = None,
             task_id: str = "global", model: Optional[str] = None) -> AgentOutcome:
         t0 = time.time()
+        try:
+            self.ctx.state["current_task"] = task
+        except Exception:
+            pass
         budget = max_steps or min(self.max_steps,
                                   int(self.config.get("autonomy.max_steps_per_agent", 12)))
         timeout = float(self.config.get("autonomy.task_timeout_seconds", 180))
@@ -254,6 +258,7 @@ class BaseAgent:
                     re.search(r"DSML|TOOL_CALL\s*:|<invoke\s+name=", answer, re.I))
                 reject = False
                 reason = ""
+                token_miss = self._design_tokens_missing(steps)
                 if leftover_call and fake_nudges < 3:
                     reject = True
                     reason = (
@@ -276,6 +281,15 @@ class BaseAgent:
                         "HONESTY CHECK: you claimed a live URL / HTTP 200 but start_server "
                         "was NEVER called in this run. Call start_server(directory=..., "
                         "port=..., marker=...) now, or say honestly that hosting was NOT done."
+                    )
+                elif token_miss and fake_nudges < 2:
+                    reject = True
+                    reason = token_miss
+                elif needs_action and not answer and fake_nudges < 2:
+                    reject = True
+                    reason = (
+                        "EMPTY ANSWER: you returned nothing. Call the next tool "
+                        "(write_file / start_server) with filled arguments."
                     )
                 if reject:
                     fake_nudges += 1
@@ -340,6 +354,10 @@ class BaseAgent:
                 messages.append({"role": "tool", "name": name,
                                  "tool_call_id": call.get("id", f"call_{i}"),
                                  "content": body})
+                if out.ok and name in ("write_file", "edit_file"):
+                    nudge = self._nudge_if_tokens_ignored(args)
+                    if nudge:
+                        messages.append({"role": "user", "content": nudge})
                 consec_fail = consec_fail + 1 if not out.ok else 0
                 if not out.ok:
                     sig = (name, json.dumps(args, sort_keys=True, default=str)[:400])
@@ -407,6 +425,60 @@ class BaseAgent:
         except Exception as e:  # noqa: BLE001
             return AgentOutcome(self.agent_name, False, self._partial(steps), steps, tokens,
                                 model_used, time.time() - t0, error=str(e))
+
+    def _token_needles(self) -> List[str]:
+        ds = (self.ctx.state or {}).get("design_system") or {}
+        colors = ds.get("colors") or {}
+        typo = ds.get("typography") or {}
+        needles = [str(colors.get(k) or "") for k in
+                   ("primary", "accent", "cta", "background")]
+        heading = str(typo.get("heading") or "")
+        if heading:
+            needles.append(heading.split()[0])
+        return [n for n in needles if len(n) >= 4]
+
+    def _nudge_if_tokens_ignored(self, args: dict) -> str:
+        path = str((args or {}).get("path") or "")
+        if not re.search(r"\.(css|html?|scss)$", path, re.I):
+            return ""
+        needles = self._token_needles()
+        if not needles:
+            return ""
+        content = str((args or {}).get("content") or (args or {}).get("new_text") or "")
+        hits = sum(1 for n in needles if n.lower() in content.lower())
+        if hits >= 2:
+            return ""
+        return (
+            f"DESIGN-SYSTEM CHECK: {path} does not use the skill tokens "
+            f"({', '.join(needles[:4])}). edit_file it to put those exact hex "
+            f"values and font names in :root. A generic purple/glass theme is a FAIL."
+        )
+
+    def _design_tokens_missing(self, steps: List[AgentStep]) -> str:
+        needles = self._token_needles()
+        if not needles:
+            return ""
+        wrote_ui = False
+        blob = ""
+        for s in steps:
+            if s.kind != "tool" or not s.ok or s.tool not in ("write_file", "edit_file"):
+                continue
+            path = str((s.args or {}).get("path") or "")
+            if not re.search(r"\.(css|html?|scss)$", path, re.I):
+                continue
+            wrote_ui = True
+            blob += str((s.args or {}).get("content") or "") + str(
+                (s.args or {}).get("new_text") or "")
+        if not wrote_ui:
+            return ""
+        hits = sum(1 for n in needles if n.lower() in blob.lower())
+        if hits >= 2:
+            return ""
+        return (
+            "DESIGN-SYSTEM CHECK: you loaded a UI skill (tokens were generated) but "
+            f"the CSS/HTML does not contain {', '.join(needles[:4])}. "
+            "edit_file the stylesheet to use those exact values before finishing."
+        )
 
     @staticmethod
     def _partial(steps: List[AgentStep]) -> str:

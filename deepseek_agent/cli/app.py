@@ -519,7 +519,7 @@ class DeepSeekApp:
             wrote = any(s.kind == "tool" and s.ok and s.tool in ("write_file", "edit_file")
                         for s in out.steps)
             if not hosted:
-                note = self._solo_host_parachute()
+                note = self._solo_host_parachute() if wrote else ""
                 if note:
                     final = (final.rstrip() + "\n\n" + note)
                 elif not wrote:
