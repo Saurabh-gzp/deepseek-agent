@@ -773,6 +773,7 @@ class DeepSeekProvider(BaseProvider):
         self.pow = PoWSolver(Path(cfg.get("data_dir", "./.deepseek")), self.notify)
         self._session: Optional[str] = None
         self._parent_id: Optional[str] = None
+        self._primed = False  # False until first successful completion
         self._created_sessions: List[str] = []
         self._token: Optional[str] = None
         self._attach: Optional[Callable[[], str]] = None
@@ -970,7 +971,8 @@ class DeepSeekProvider(BaseProvider):
         for m in messages:
             if m.get("role") == "system":
                 system = str(m.get("content") or "")
-        prompt = turn_prompt(self._primed, system, tools, messages)
+        primed = bool(getattr(self, "_primed", False))
+        prompt = turn_prompt(primed, system, tools, messages)
         if not self._session:
             try:
                 sess = self._request("/chat_session/create", {"character_id": None})

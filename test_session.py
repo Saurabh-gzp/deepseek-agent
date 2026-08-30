@@ -59,5 +59,15 @@ class MessageId(unittest.TestCase):
         self.assertIsNone(extract_message_id("data: {\"v\":\"hello\"}\n"))
 
 
+class ProviderInit(unittest.TestCase):
+    def test_primed_exists_without_reset_session(self):
+        """Live: /resume then 'hyy' crashed — _primed was only set in reset_session."""
+        from tempfile import TemporaryDirectory
+        from deepseek_agent.providers.deepseek import DeepSeekProvider
+        with TemporaryDirectory() as d:
+            p = DeepSeekProvider({"keys_dir": d, "data_dir": d}, None)
+            self.assertFalse(getattr(p, "_primed", True))
+
+
 if __name__ == "__main__":
     unittest.main()
